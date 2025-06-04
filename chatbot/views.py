@@ -1,53 +1,50 @@
-from django.shortcuts import render
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status
 import requests
+from .vector_store import buscar_documentos
 
-from .vector_store import buscar_documentos  # Importa desde vector_store.py
-
-# Función para consultar Hugging Face (puedes cambiar a Ollama si quieres)
 def consultar_llama(prompt):
     token = "Bearer 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"
-    endpoint = "https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta"
+    endpoint = "https://api-inference.huggingface.co/models/tiiuae/falcon-7b-instruct"
 
     headers = {
         "Authorization": token,
         "Content-Type": "application/json"
     }
-    data = {
-        "inputs": prompt
-    }
+    data = {"inputs": prompt}
 
-    response = requests.post(endpoint, headers=headers, json=data)
-    
-    if response.status_code == 200:
-        return response.json()[0]["generated_text"].strip()
-    else:
-        return f"[Error {response.status_code}] {response.text}"
+    try:
+        response = requests.post(endpoint, headers=headers, json=data, timeout=60)
+        response.raise_for_status()
+        result = response.json()
+        return result[0]["generated_text"].strip()
+    except Exception as e:
+        return f"[Error] {str(e)}"
 
-# API REST del chatbot
 class ChatbotAPIView(APIView):
     def post(self, request):
         pregunta = request.data.get("pregunta")
         if not pregunta:
             return Response({"error": "Falta el campo 'pregunta'"}, status=400)
 
-        # Buscar contexto en base de conocimiento
         documentos = buscar_documentos(pregunta)
-        contexto = "\n\n".join([doc.page_content for doc in documentos])
+        if not documentos:
+            return Response({"respuesta": "No se encuentra información suficiente para responder con certeza."})
 
-        # Construir prompt con contexto real
-        prompt = f"""Eres un asistente académico del Departamento de Ciencias de la Computación de la ESPE.
-Responde a la siguiente pregunta utilizando únicamente la información proporcionada a continuación.
+        contexto = "\n".join([doc.page_content for doc in documentos])[:1000]
 
-Contexto:
+        prompt = f"""Responde como un asistente académico experto de la ESPE.
+
+Tu única fuente de información es el siguiente CONTEXTO.
+No puedes inventar datos. Si no hay información en el contexto, responde:
+"No se encuentra información suficiente para responder con certeza".
+
+=== CONTEXTO ===
 {contexto}
+================
 
-Pregunta:
-{pregunta}
-
+Pregunta: {pregunta}
 Respuesta:"""
-        
+
         respuesta = consultar_llama(prompt)
-        return Response({"respuesta": respuesta}, status=200)
+        return Response({"respuesta": respuesta})
