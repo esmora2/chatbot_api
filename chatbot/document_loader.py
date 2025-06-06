@@ -10,82 +10,45 @@ BASE_DIR = os.path.join("media", "docs")
 def cargar_documentos():
     all_docs = []
 
-    # 1. Cargar CSV con PREGUNTA + RESPUESTA combinadas
-    csv_path = os.path.join(BASE_DIR, "basecsvf.csv")
-    if os.path.exists(csv_path):
-        df = pd.read_csv(csv_path)
+    # 1. Cargar CSV de FAQ (PREGUNTA + RESPUESTA combinadas)
+    faq_csv = os.path.join(BASE_DIR, "basecsvf.csv")
+    if os.path.exists(faq_csv):
+        df = pd.read_csv(faq_csv)
         df = df.dropna(subset=["Pregunta", "Respuesta"])
 
         for _, row in df.iterrows():
-            # SOLUCIÓN: Combinar pregunta y respuesta para mejorar la búsqueda
-            contenido_combinado = f"Pregunta: {row['Pregunta']}\nRespuesta: {row['Respuesta']}"
-            
+            contenido = f"Pregunta: {row['Pregunta']}\nRespuesta: {row['Respuesta']}"
             doc = Document(
-                page_content=contenido_combinado,  # Ahora incluye la pregunta
+                page_content=contenido,
                 metadata={
-                    "source": "faq", 
+                    "source": "faq",
+                    "tipo": "faq",
                     "pregunta_original": row["Pregunta"],
                     "respuesta_original": row["Respuesta"]
                 }
             )
             all_docs.append(doc)
 
-    # 2. Cargar PDFs (sin cambios)
-    for filename in os.listdir(BASE_DIR):
-        if filename.endswith(".pdf"):
-            loader = PyMuPDFLoader(os.path.join(BASE_DIR, filename))
-            raw_docs = loader.load()
-
-            splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-            split_docs = splitter.split_documents(raw_docs)
-
-            for doc in split_docs:
-                doc.metadata["source"] = filename
-                all_docs.append(doc)
-
-    return all_docs
-
-# ALTERNATIVA: Función para crear documentos duales
-def cargar_documentos_duales():
-    """
-    Alternativa que crea DOS documentos por cada FAQ:
-    1. Uno con la pregunta (para encontrar preguntas similares)
-    2. Uno con pregunta+respuesta (para contexto completo)
-    """
-    all_docs = []
-
-    csv_path = os.path.join(BASE_DIR, "basecsvf.csv")
-    if os.path.exists(csv_path):
-        df = pd.read_csv(csv_path)
-        df = df.dropna(subset=["Pregunta", "Respuesta"])
+    # 2. Cargar contenido web del DCCO (scrapeado)
+    web_csv = os.path.join(BASE_DIR, "contenido_web_dcco.csv")
+    if os.path.exists(web_csv):
+        df = pd.read_csv(web_csv)
+        df = df.dropna(subset=["Titulo", "Contenido"])
 
         for _, row in df.iterrows():
-            # Documento 1: Solo la pregunta (para matching)
-            doc_pregunta = Document(
-                page_content=row["Pregunta"],
+            doc = Document(
+                page_content=row["Contenido"],
                 metadata={
-                    "source": "faq_pregunta", 
-                    "pregunta_original": row["Pregunta"],
-                    "respuesta_original": row["Respuesta"],
-                    "tipo": "pregunta"
+                    "source": "web",
+                    "tipo": "web",
+                    "titulo": row["Titulo"],
+                    "url": row.get("URL", "")
                 }
             )
-            all_docs.append(doc_pregunta)
-            
-            # Documento 2: Pregunta + Respuesta (para contexto)
-            contenido_completo = f"P: {row['Pregunta']}\nR: {row['Respuesta']}"
-            doc_completo = Document(
-                page_content=contenido_completo,
-                metadata={
-                    "source": "faq_completa", 
-                    "pregunta_original": row["Pregunta"],
-                    "respuesta_original": row["Respuesta"],
-                    "tipo": "completa"
-                }
-            )
-            all_docs.append(doc_completo)
+            all_docs.append(doc)
+            print(f"[WEB] {row['Titulo']} cargado desde {row.get('URL', '')}")
 
-    # Cargar PDFs
+    # 3. Cargar PDFs como siempre
     for filename in os.listdir(BASE_DIR):
         if filename.endswith(".pdf"):
             loader = PyMuPDFLoader(os.path.join(BASE_DIR, filename))

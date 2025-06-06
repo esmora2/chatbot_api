@@ -15,56 +15,52 @@ class ChatbotAPIView(APIView):
             return Response({"error": "Falta el campo 'pregunta'"}, status=400)
 
         try:
-            # Buscar documentos relevantes
-            documentos = buscar_documentos(pregunta, top_k=5)  # Buscar más documentos
-            
+            documentos = buscar_documentos(pregunta, top_k=5)
             if not documentos:
-                return Response({
-                    "respuesta": "No encontré información relevante para tu pregunta."
-                }, status=200)
-            
-            # Priorizar documentos del CSV
-            mejor_respuesta = None
-            mejor_score = 0
-            
+                return Response({"respuesta": "No encontré información relevante para tu pregunta."}, status=200)
+
+            # 1. Verificar si hay una coincidencia directa en FAQ
             for doc in documentos:
                 if doc.metadata.get("source") == "faq":
-                    # Si tenemos la respuesta original en metadata, usarla
-                    if "respuesta_original" in doc.metadata:
+                    pregunta_csv = doc.metadata.get("pregunta_original", "").lower()
+                    pregunta_usuario = pregunta.lower()
+
+                    if pregunta_usuario in pregunta_csv or pregunta_csv in pregunta_usuario:
                         return Response({
-                            "respuesta": doc.metadata["respuesta_original"],
+                            "respuesta": doc.metadata.get("respuesta_original", ""),
                             "pregunta_relacionada": doc.metadata.get("pregunta_original", ""),
                             "fuente": "FAQ",
-                            "metodo": "csv_directo"
+                            "metodo": "match_textual_directo"
                         }, status=200)
-                    
-                    # Si no, extraer de page_content
-                    if "Respuesta:" in doc.page_content:
-                        respuesta_extraida = doc.page_content.split("Respuesta:")[-1].strip()
-                        return Response({
-                            "respuesta": respuesta_extraida,
-                            "fuente": "FAQ",
-                            "metodo": "csv_extraido"
-                        }, status=200)
-            
-            # Si no hay documentos CSV, usar el más relevante
-            doc_relevante = documentos[0]
-            respuesta = doc_relevante.page_content[:400]
-            if len(doc_relevante.page_content) > 400:
+
+            # 2. Si no coincidencia directa, buscar FAQ por embedding
+            for doc in documentos:
+                if doc.metadata.get("source") == "faq":
+                    return Response({
+                        "respuesta": doc.metadata.get("respuesta_original", ""),
+                        "pregunta_relacionada": doc.metadata.get("pregunta_original", ""),
+                        "fuente": "FAQ",
+                        "metodo": "faq_por_embedding"
+                    }, status=200)
+
+            # 3. Usar documentos generales (web o PDF)
+            doc = documentos[0]
+            respuesta = doc.page_content[:400]
+            if len(doc.page_content) > 400:
                 respuesta += "..."
-            
+
             return Response({
                 "respuesta": respuesta,
-                "fuente": doc_relevante.metadata.get("source", "PDF"),
-                "documentos_encontrados": len(documentos),
-                "metodo": "documento_general"
+                "fuente": doc.metadata.get("source", "documento"),
+                "metodo": doc.metadata.get("tipo", "general")
             }, status=200)
-            
+
         except Exception as e:
             return Response({
                 "error": "Error interno del servidor",
                 "detalle": str(e)
             }, status=500)
+
 
 # Versión alternativa con búsqueda híbrida
 class ChatbotHibridoAPIView(APIView):
