@@ -18,14 +18,8 @@ index.add(embedding_matrix)
 
 
 # Búsqueda semántica
-def buscar_documentos(query, top_k=3, min_similarity=0.6):
-    query_embedding = embedding_model.encode([query], convert_to_numpy=True).astype("float32")
+def buscar_documentos(query, top_k=3):
+    query_embedding = embedding_model.encode([query]).astype("float32")
     distances, indices = index.search(query_embedding, top_k)
-
-    resultados = []
-    for i, dist in zip(indices[0], distances[0]):
-        similarity = 1 / (1 + dist)
-        if similarity >= min_similarity:
-            resultados.append(all_documents[i])
-
+    resultados = [all_documents[i] for i in indices[0]]
     return resultados
