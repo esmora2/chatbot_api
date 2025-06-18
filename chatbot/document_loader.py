@@ -10,20 +10,45 @@ BASE_DIR = os.path.join("media", "docs")
 def cargar_documentos():
     all_docs = []
 
-    # 1. Cargar CSV
-    csv_path = os.path.join(BASE_DIR, "basecsvf.csv")
-    if os.path.exists(csv_path):
-        df = pd.read_csv(csv_path)
+    # 1. Cargar CSV de FAQ (PREGUNTA + RESPUESTA combinadas)
+    faq_csv = os.path.join(BASE_DIR, "basecsvf.csv")
+    if os.path.exists(faq_csv):
+        df = pd.read_csv(faq_csv)
         df = df.dropna(subset=["Pregunta", "Respuesta"])
 
         for _, row in df.iterrows():
+            contenido = f"Pregunta: {row['Pregunta']}\nRespuesta: {row['Respuesta']}"
             doc = Document(
-                page_content=row["Respuesta"],
-                metadata={"source": "faq", "pregunta": row["Pregunta"]}
+                page_content=contenido,
+                metadata={
+                    "source": "faq",
+                    "tipo": "faq",
+                    "pregunta_original": row["Pregunta"],
+                    "respuesta_original": row["Respuesta"]
+                }
             )
             all_docs.append(doc)
 
-    # 2. Cargar PDFs
+    # 2. Cargar contenido web del DCCO (scrapeado)
+    web_csv = os.path.join(BASE_DIR, "contenido_web_dcco.csv")
+    if os.path.exists(web_csv):
+        df = pd.read_csv(web_csv)
+        df = df.dropna(subset=["Titulo", "Contenido"])
+
+        for _, row in df.iterrows():
+            doc = Document(
+                page_content=row["Contenido"],
+                metadata={
+                    "source": "web",
+                    "tipo": "web",
+                    "titulo": row["Titulo"],
+                    "url": row.get("URL", "")
+                }
+            )
+            all_docs.append(doc)
+            print(f"[WEB] {row['Titulo']} cargado desde {row.get('URL', '')}")
+
+    # 3. Cargar PDFs como siempre
     for filename in os.listdir(BASE_DIR):
         if filename.endswith(".pdf"):
             loader = PyMuPDFLoader(os.path.join(BASE_DIR, filename))
@@ -34,6 +59,7 @@ def cargar_documentos():
 
             for doc in split_docs:
                 doc.metadata["source"] = filename
+                doc.metadata["tipo"] = "pdf"
                 all_docs.append(doc)
 
     return all_docs
