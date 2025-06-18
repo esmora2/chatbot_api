@@ -10,37 +10,37 @@ from .vector_store import buscar_documentos
 
 # API mejorada que maneja correctamente las respuestas del CSV
 # Función para calcular similitud entre textos
+OPENAI_API_KEY = "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"  # Pega aquí tu clave real
+
+# --------- FUNCIONES AUXILIARES ---------
+
 def similitud_texto(a, b):
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
-def consultar_llm_mistral(prompt):
-    token = "Bearer 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"  # Asegúrate de que tu token aún esté válido
-    endpoint = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1"
-
+def consultar_openai(prompt):
+    """
+    Llama a OpenAI (GPT-3.5) con un prompt.
+    """
+    endpoint = "https://api.openai.com/v1/chat/completions"
     headers = {
-        "Authorization": token,
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json"
     }
     data = {
-        "inputs": prompt
+        "model": "gpt-3.5-turbo",
+        "messages": [
+            {"role": "system", "content": "Eres un asistente académico del Departamento de Ciencias de la Computación de la ESPE. Responde siempre en español."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.6
     }
-
     response = requests.post(endpoint, headers=headers, json=data)
-
     if response.status_code == 200:
-        respuesta_json = response.json()
-        if isinstance(respuesta_json, list):
-            return respuesta_json[0]["generated_text"].strip()
-        elif "generated_text" in respuesta_json:
-            return respuesta_json["generated_text"].strip()
-        else:
-            return "[Error] Formato de respuesta desconocido"
+        return response.json()["choices"][0]["message"]["content"].strip()
     else:
         return f"[Error {response.status_code}] {response.text}"
 
-# -------------------------
-# VISTA PRINCIPAL DEL CHATBOT
-# -------------------------
+# --------- CLASE PRINCIPAL DE LA API ---------
 
 class ChatbotAPIView(APIView):
     INTENCIONES_BASICAS = {
@@ -67,6 +67,7 @@ class ChatbotAPIView(APIView):
         if not pregunta:
             return Response({"error": "Falta el campo 'pregunta'"}, status=400)
 
+        # 1. Intenciones básicas
         intencion = self.detectar_intencion(pregunta)
         if intencion:
             return Response({
@@ -77,40 +78,78 @@ class ChatbotAPIView(APIView):
 
         try:
             documentos = buscar_documentos(pregunta, top_k=5)
-            if not documentos:
-                return Response({"respuesta": "No encontré información relevante para tu pregunta."}, status=200)
 
-            # 1. Si encuentra una FAQ similar
+            # 2. Buscar coincidencia exacta en FAQs
             for doc in documentos:
                 if doc.metadata.get("source") == "faq":
                     score = similitud_texto(pregunta, doc.metadata.get("pregunta_original", ""))
                     if score >= 0.75:
+                        respuesta_base = doc.metadata["respuesta_original"]
+                        prompt = f"""La siguiente es una posible respuesta basada en una FAQ de la ESPE:
+
+Respuesta base:
+{respuesta_base}
+
+Por favor, reformúlala si es necesario para que suene más natural y completa para el usuario que preguntó:
+
+{pregunta}
+
+Respuesta:"""
+                        respuesta_mejorada = consultar_openai(prompt)
                         return Response({
-                            "respuesta": doc.metadata["respuesta_original"],
+                            "respuesta": respuesta_mejorada,
                             "pregunta_relacionada": doc.metadata["pregunta_original"],
                             "fuente": "FAQ",
-                            "metodo": "faq_similitud_validada",
+                            "metodo": "faq_reformulada",
                             "similitud": round(score, 3)
                         }, status=200)
 
-            # 2. Buscar en web/pdf con LLM como refuerzo
-            contexto = "\n\n".join([doc.page_content[:500] for doc in documentos])
-            prompt = f"""Eres un asistente académico del Departamento de Ciencias de la Computación de la ESPE.
-Responde a la siguiente pregunta utilizando solamente la siguiente información:
+            # 3. Buscar mejor contenido en web/pdf
+            mejor_doc = None
+            mejor_score = 0
+            for doc in documentos:
+                if doc.metadata.get("source") != "faq":
+                    score = similitud_texto(pregunta, doc.page_content[:200])
+                    if score > mejor_score:
+                        mejor_doc = doc
+                        mejor_score = score
+
+            if mejor_doc and mejor_score >= 0.3:
+                contexto = mejor_doc.page_content[:800]
+                prompt = f"""Con base únicamente en el siguiente contenido:
+
+{contexto}
+
+Responde la siguiente pregunta de manera clara y académica:
+
+{pregunta}
+
+Respuesta:"""
+                respuesta_llm = consultar_openai(prompt)
+                return Response({
+                    "respuesta": respuesta_llm,
+                    "fuente": mejor_doc.metadata.get("source", "web"),
+                    "titulo": mejor_doc.metadata.get("titulo", ""),
+                    "metodo": "web_llm_refinado",
+                    "similitud": round(mejor_score, 3)
+                }, status=200)
+
+            # 4. Último recurso: pasar todo el contexto al LLM
+            contexto_general = "\n\n".join([doc.page_content[:400] for doc in documentos])
+            prompt = f"""Responde la siguiente pregunta del usuario usando la información disponible.
 
 Contexto:
-{contexto}
+{contexto_general}
 
 Pregunta:
 {pregunta}
 
 Respuesta:"""
-
-            respuesta_llm = consultar_llm_mistral(prompt)
+            respuesta_fallback = consultar_openai(prompt)
             return Response({
-                "respuesta": respuesta_llm,
+                "respuesta": respuesta_fallback,
                 "fuente": "LLM",
-                "metodo": "llm_mistral"
+                "metodo": "llm_sin_respuesta_base"
             }, status=200)
 
         except Exception as e:
