@@ -1,54 +1,105 @@
+from django.shortcuts import render
 from rest_framework.views import APIView
 from rest_framework.response import Response
-import requests
+from rest_framework import status
+from difflib import SequenceMatcher
+import re
 
 from .vector_store import buscar_documentos
 
 # API mejorada que maneja correctamente las respuestas del CSV
+def similitud_texto(a, b):
+    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+
 class ChatbotAPIView(APIView):
+    # Añadir estas constantes para intenciones básicas
+    INTENCIONES_BASICAS = {
+        "saludos": ["hola", "buenos días", "buenos dias", "buenas tardes", "hi", "hello"],
+        "despedidas": ["adiós", "hasta luego", "nos vemos", "bye"],
+        "agradecimientos": ["gracias", "muchas gracias", "thanks"]
+    }
+
+    RESPUESTAS_BASICAS = {
+        "saludos": "¡Hola! ¿En qué puedo ayudarte hoy?",
+        "despedidas": "¡Hasta luego! No dudes en volver si tienes más preguntas.",
+        "agradecimientos": "¡De nada! Estoy aquí para ayudarte."
+    }
+
+    def detectar_intencion(self, pregunta):
+        pregunta = pregunta.lower().strip()
+        for intencion, palabras in self.INTENCIONES_BASICAS.items():
+            if any(palabra in pregunta for palabra in palabras):
+                return intencion
+        return None
+
     def post(self, request):
         pregunta = request.data.get("pregunta")
         if not pregunta:
             return Response({"error": "Falta el campo 'pregunta'"}, status=400)
+        # 1. Manejar intenciones básicas primero
+        intencion = self.detectar_intencion(pregunta)
+        if intencion:
+            return Response({
+                "respuesta": self.RESPUESTAS_BASICAS[intencion],
+                "fuente": "sistema",
+                "metodo": "intencion_basica"
+            }, status=200)
         try:
             documentos = buscar_documentos(pregunta, top_k=5)
             if not documentos:
                 return Response({"respuesta": "No encontré información relevante para tu pregunta."}, status=200)
 
-            # 1. Verificar si hay una coincidencia directa en FAQ
+            # 2. Búsqueda en FAQs con umbral estricto
+            mejor_doc_faq = None
+            mejor_score_faq = 0
+
             for doc in documentos:
                 if doc.metadata.get("source") == "faq":
-                    pregunta_csv = doc.metadata.get("pregunta_original", "").lower()
-                    pregunta_usuario = pregunta.lower()
+                    pregunta_csv = doc.metadata.get("pregunta_original", "")
+                    score = similitud_texto(pregunta, pregunta_csv)
+                    if score > mejor_score_faq:
+                        mejor_doc_faq = doc
+                        mejor_score_faq = score
 
-                    if pregunta_usuario in pregunta_csv or pregunta_csv in pregunta_usuario:
-                        return Response({
-                            "respuesta": doc.metadata.get("respuesta_original", ""),
-                            "pregunta_relacionada": doc.metadata.get("pregunta_original", ""),
-                            "fuente": "FAQ",
-                            "metodo": "match_textual_directo"
-                        }, status=200)
+            if mejor_doc_faq and mejor_score_faq >= 0.75:
+                return Response({
+                    "respuesta": mejor_doc_faq.metadata["respuesta_original"],
+                    "pregunta_relacionada": mejor_doc_faq.metadata["pregunta_original"],
+                    "fuente": "FAQ",
+                    "metodo": "faq_similitud_validada",
+                    "similitud": round(mejor_score_faq, 3)
+                }, status=200)
 
-            # 2. Si no coincidencia directa, buscar FAQ por embedding
+            # 3. Búsqueda en otros documentos con umbral mínimo
+            mejor_doc_general = None
+            mejor_score_general = 0
+            umbral_minimo = 0.25  # Ajustar según necesidad
+
             for doc in documentos:
-                if doc.metadata.get("source") == "faq":
-                    return Response({
-                        "respuesta": doc.metadata.get("respuesta_original", ""),
-                        "pregunta_relacionada": doc.metadata.get("pregunta_original", ""),
-                        "fuente": "FAQ",
-                        "metodo": "faq_por_embedding"
-                    }, status=200)
+                if doc.metadata.get("source") != "faq":
+                    # Calcular similitud con el contenido del documento
+                    score = similitud_texto(pregunta, doc.page_content[:100])  # Comparar con inicio del contenido
+                    if score > mejor_score_general:
+                        mejor_doc_general = doc
+                        mejor_score_general = score
 
-            # 3. Usar documentos generales (web o PDF)
-            doc = documentos[0]
-            respuesta = doc.page_content[:400]
-            if len(doc.page_content) > 400:
-                respuesta += "..."
+            if mejor_doc_general and mejor_score_general >= umbral_minimo:
+                respuesta = mejor_doc_general.page_content[:400]
+                if len(mejor_doc_general.page_content) > 400:
+                    respuesta += "..."
+                return Response({
+                    "respuesta": respuesta,
+                    "fuente": mejor_doc_general.metadata.get("source", "desconocido"),
+                    "titulo": mejor_doc_general.metadata.get("titulo", ""),
+                    "metodo": mejor_doc_general.metadata.get("tipo", "documento"),
+                    "similitud": round(mejor_score_general, 3)
+                }, status=200)
 
+            # 4. Si no hay coincidencias válidas
             return Response({
-                "respuesta": respuesta,
-                "fuente": doc.metadata.get("source", "documento"),
-                "metodo": doc.metadata.get("tipo", "general")
+                "respuesta": "No encontré información relevante para tu pregunta. ¿Podrías reformularla o ser más específico?",
+                "fuente": "sistema",
+                "metodo": "sin_coincidencias_validas"
             }, status=200)
 
         except Exception as e:
