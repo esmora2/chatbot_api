@@ -14,7 +14,7 @@ def similitud_texto(a, b):
 class ChatbotAPIView(APIView):
     # Añadir estas constantes para intenciones básicas
     INTENCIONES_BASICAS = {
-        "saludos": ["hola", "buenos días", "buenas tardes", "hi", "hello"],
+        "saludos": ["hola", "buenos días", "buenos dias", "buenas tardes", "hi", "hello"],
         "despedidas": ["adiós", "hasta luego", "nos vemos", "bye"],
         "agradecimientos": ["gracias", "muchas gracias", "thanks"]
     }
