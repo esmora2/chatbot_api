@@ -1,5 +1,5 @@
 from huggingface_hub import login
-login("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")
+login("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")  # Usa el mismo token que en views.py
 
 from sentence_transformers import SentenceTransformer
 import faiss

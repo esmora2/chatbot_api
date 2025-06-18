@@ -4,17 +4,47 @@ from rest_framework.response import Response
 from rest_framework import status
 from difflib import SequenceMatcher
 import re
+import requests
 
 from .vector_store import buscar_documentos
 
 # API mejorada que maneja correctamente las respuestas del CSV
+# Función para calcular similitud entre textos
+OPENAI_API_KEY = "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"  # Pega aquí tu clave real
+
+# --------- FUNCIONES AUXILIARES ---------
+
 def similitud_texto(a, b):
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
+def consultar_openai(prompt):
+    """
+    Llama a OpenAI (GPT-3.5) con un prompt.
+    """
+    endpoint = "https://api.openai.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [
+            {"role": "system", "content": "Eres un asistente académico del Departamento de Ciencias de la Computación de la ESPE. Responde siempre en español."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.6
+    }
+    response = requests.post(endpoint, headers=headers, json=data)
+    if response.status_code == 200:
+        return response.json()["choices"][0]["message"]["content"].strip()
+    else:
+        return f"[Error {response.status_code}] {response.text}"
+
+# --------- CLASE PRINCIPAL DE LA API ---------
+
 class ChatbotAPIView(APIView):
-    # Añadir estas constantes para intenciones básicas
     INTENCIONES_BASICAS = {
-        "saludos": ["hola", "buenos días", "buenos dias", "buenas tardes", "hi", "hello"],
+        "saludos": ["hola", "buenos días", "buenas tardes", "hi", "hello"],
         "despedidas": ["adiós", "hasta luego", "nos vemos", "bye"],
         "agradecimientos": ["gracias", "muchas gracias", "thanks"]
     }
@@ -36,7 +66,8 @@ class ChatbotAPIView(APIView):
         pregunta = request.data.get("pregunta")
         if not pregunta:
             return Response({"error": "Falta el campo 'pregunta'"}, status=400)
-        # 1. Manejar intenciones básicas primero
+
+        # 1. Intenciones básicas
         intencion = self.detectar_intencion(pregunta)
         if intencion:
             return Response({
@@ -46,60 +77,78 @@ class ChatbotAPIView(APIView):
             }, status=200)
         try:
             documentos = buscar_documentos(pregunta, top_k=5)
-            if not documentos:
-                return Response({"respuesta": "No encontré información relevante para tu pregunta."}, status=200)
 
-            # 2. Búsqueda en FAQs con umbral estricto
-            mejor_doc_faq = None
-            mejor_score_faq = 0
-
+            # 2. Buscar coincidencia exacta en FAQs
             for doc in documentos:
                 if doc.metadata.get("source") == "faq":
-                    pregunta_csv = doc.metadata.get("pregunta_original", "")
-                    score = similitud_texto(pregunta, pregunta_csv)
-                    if score > mejor_score_faq:
-                        mejor_doc_faq = doc
-                        mejor_score_faq = score
+                    score = similitud_texto(pregunta, doc.metadata.get("pregunta_original", ""))
+                    if score >= 0.75:
+                        respuesta_base = doc.metadata["respuesta_original"]
+                        prompt = f"""La siguiente es una posible respuesta basada en una FAQ de la ESPE:
 
-            if mejor_doc_faq and mejor_score_faq >= 0.75:
-                return Response({
-                    "respuesta": mejor_doc_faq.metadata["respuesta_original"],
-                    "pregunta_relacionada": mejor_doc_faq.metadata["pregunta_original"],
-                    "fuente": "FAQ",
-                    "metodo": "faq_similitud_validada",
-                    "similitud": round(mejor_score_faq, 3)
-                }, status=200)
+Respuesta base:
+{respuesta_base}
 
-            # 3. Búsqueda en otros documentos con umbral mínimo
-            mejor_doc_general = None
-            mejor_score_general = 0
-            umbral_minimo = 0.25  # Ajustar según necesidad
+Por favor, reformúlala si es necesario para que suene más natural y completa para el usuario que preguntó:
 
+{pregunta}
+
+Respuesta:"""
+                        respuesta_mejorada = consultar_openai(prompt)
+                        return Response({
+                            "respuesta": respuesta_mejorada,
+                            "pregunta_relacionada": doc.metadata["pregunta_original"],
+                            "fuente": "FAQ",
+                            "metodo": "faq_reformulada",
+                            "similitud": round(score, 3)
+                        }, status=200)
+
+            # 3. Buscar mejor contenido en web/pdf
+            mejor_doc = None
+            mejor_score = 0
             for doc in documentos:
                 if doc.metadata.get("source") != "faq":
-                    # Calcular similitud con el contenido del documento
-                    score = similitud_texto(pregunta, doc.page_content[:100])  # Comparar con inicio del contenido
-                    if score > mejor_score_general:
-                        mejor_doc_general = doc
-                        mejor_score_general = score
+                    score = similitud_texto(pregunta, doc.page_content[:200])
+                    if score > mejor_score:
+                        mejor_doc = doc
+                        mejor_score = score
 
-            if mejor_doc_general and mejor_score_general >= umbral_minimo:
-                respuesta = mejor_doc_general.page_content[:400]
-                if len(mejor_doc_general.page_content) > 400:
-                    respuesta += "..."
+            if mejor_doc and mejor_score >= 0.3:
+                contexto = mejor_doc.page_content[:800]
+                prompt = f"""Con base únicamente en el siguiente contenido:
+
+{contexto}
+
+Responde la siguiente pregunta de manera clara y académica:
+
+{pregunta}
+
+Respuesta:"""
+                respuesta_llm = consultar_openai(prompt)
                 return Response({
-                    "respuesta": respuesta,
-                    "fuente": mejor_doc_general.metadata.get("source", "desconocido"),
-                    "titulo": mejor_doc_general.metadata.get("titulo", ""),
-                    "metodo": mejor_doc_general.metadata.get("tipo", "documento"),
-                    "similitud": round(mejor_score_general, 3)
+                    "respuesta": respuesta_llm,
+                    "fuente": mejor_doc.metadata.get("source", "web"),
+                    "titulo": mejor_doc.metadata.get("titulo", ""),
+                    "metodo": "web_llm_refinado",
+                    "similitud": round(mejor_score, 3)
                 }, status=200)
 
-            # 4. Si no hay coincidencias válidas
+            # 4. Último recurso: pasar todo el contexto al LLM
+            contexto_general = "\n\n".join([doc.page_content[:400] for doc in documentos])
+            prompt = f"""Responde la siguiente pregunta del usuario usando la información disponible.
+
+Contexto:
+{contexto_general}
+
+Pregunta:
+{pregunta}
+
+Respuesta:"""
+            respuesta_fallback = consultar_openai(prompt)
             return Response({
-                "respuesta": "No encontré información relevante para tu pregunta. ¿Podrías reformularla o ser más específico?",
-                "fuente": "sistema",
-                "metodo": "sin_coincidencias_validas"
+                "respuesta": respuesta_fallback,
+                "fuente": "LLM",
+                "metodo": "llm_sin_respuesta_base"
             }, status=200)
 
         except Exception as e:
@@ -107,7 +156,6 @@ class ChatbotAPIView(APIView):
                 "error": "Error interno del servidor",
                 "detalle": str(e)
             }, status=500)
-
 
 # Versión alternativa con búsqueda híbrida
 class ChatbotHibridoAPIView(APIView):
