@@ -1,5 +1,6 @@
 import pandas as pd
 import os
+import re
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
@@ -7,10 +8,44 @@ from langchain.schema import Document
 # Ruta base de documentos
 BASE_DIR = os.path.join("media", "docs")
 
+def limpiar_contenido_web(texto):
+    """
+    Limpia texto extraído del sitio web del DCCO para eliminar navegación, encabezados y ruido visual.
+    """
+    # 1. Unificar saltos de línea
+    texto = re.sub(r'\n+', '\n', texto)
+    lineas = texto.split("\n")
+    lineas_limpias = []
+
+    # 2. Definir patrones de líneas que suelen ser navegación o títulos
+    patrones_basura = [
+        r'^(Saltar al contenido|Alternar menú)$',
+        r'^(QUIÉNES SOMOS|INVESTIGACIÓN|PROYECTOS|PUBLICACIONES|SERVICIOS)$',
+        r'^(Departamentos y Centros|Eventos|Libros|Revistas|Estadísticas|Noticias Vinculación|Convenios)$',
+        r'^(Filosofía|Autoridades|Áreas de Conocimiento|Planta Docente|Horario de Atención|Resultados de la Investigación)$',
+        r'^Página principal$', r'^Inicio$', r'^Menú$', r'^Información$', r'^Descripción$'
+    ]
+
+    for linea in lineas:
+        linea = linea.strip()
+        if not linea:
+            continue
+        if any(re.match(p, linea, re.IGNORECASE) for p in patrones_basura):
+            continue
+        if len(linea.split()) <= 2 and linea.isupper():
+            continue  # evitar encabezados tipo "SERVICIOS"
+        if len(linea) < 5:
+            continue  # saltar texto muy corto que suele ser ruido
+
+        lineas_limpias.append(linea)
+
+    return "\n".join(lineas_limpias).strip()
+
+
 def cargar_documentos():
     all_docs = []
 
-    # 1. Cargar CSV de FAQ (PREGUNTA + RESPUESTA combinadas)
+    # 1. Cargar CSV de FAQ
     faq_csv = os.path.join(BASE_DIR, "basecsvf.csv")
     if os.path.exists(faq_csv):
         df = pd.read_csv(faq_csv)
@@ -29,15 +64,16 @@ def cargar_documentos():
             )
             all_docs.append(doc)
 
-    # 2. Cargar contenido web del DCCO (scrapeado)
+    # 2. Cargar contenido web DCCO (scraping limpio)
     web_csv = os.path.join(BASE_DIR, "contenido_web_dcco.csv")
     if os.path.exists(web_csv):
         df = pd.read_csv(web_csv)
         df = df.dropna(subset=["Titulo", "Contenido"])
 
         for _, row in df.iterrows():
+            contenido_limpio = limpiar_contenido_web(row["Contenido"])
             doc = Document(
-                page_content=row["Contenido"],
+                page_content=contenido_limpio,
                 metadata={
                     "source": "web",
                     "tipo": "web",
@@ -48,7 +84,7 @@ def cargar_documentos():
             all_docs.append(doc)
             print(f"[WEB] {row['Titulo']} cargado desde {row.get('URL', '')}")
 
-    # 3. Cargar PDFs como siempre
+    # 3. Cargar PDFs
     for filename in os.listdir(BASE_DIR):
         if filename.endswith(".pdf"):
             loader = PyMuPDFLoader(os.path.join(BASE_DIR, filename))

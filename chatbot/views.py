@@ -4,17 +4,47 @@ from rest_framework.response import Response
 from rest_framework import status
 from difflib import SequenceMatcher
 import re
+import requests
 
 from .vector_store import buscar_documentos
 
 # API mejorada que maneja correctamente las respuestas del CSV
+# Función para calcular similitud entre textos
 def similitud_texto(a, b):
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
+def consultar_llm_mistral(prompt):
+    token = "Bearer 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"  # Asegúrate de que tu token aún esté válido
+    endpoint = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1"
+
+    headers = {
+        "Authorization": token,
+        "Content-Type": "application/json"
+    }
+    data = {
+        "inputs": prompt
+    }
+
+    response = requests.post(endpoint, headers=headers, json=data)
+
+    if response.status_code == 200:
+        respuesta_json = response.json()
+        if isinstance(respuesta_json, list):
+            return respuesta_json[0]["generated_text"].strip()
+        elif "generated_text" in respuesta_json:
+            return respuesta_json["generated_text"].strip()
+        else:
+            return "[Error] Formato de respuesta desconocido"
+    else:
+        return f"[Error {response.status_code}] {response.text}"
+
+# -------------------------
+# VISTA PRINCIPAL DEL CHATBOT
+# -------------------------
+
 class ChatbotAPIView(APIView):
-    # Añadir estas constantes para intenciones básicas
     INTENCIONES_BASICAS = {
-        "saludos": ["hola", "buenos días", "buenos dias", "buenas tardes", "hi", "hello"],
+        "saludos": ["hola", "buenos días", "buenas tardes", "hi", "hello"],
         "despedidas": ["adiós", "hasta luego", "nos vemos", "bye"],
         "agradecimientos": ["gracias", "muchas gracias", "thanks"]
     }
@@ -37,7 +67,6 @@ class ChatbotAPIView(APIView):
         if not pregunta:
             return Response({"error": "Falta el campo 'pregunta'"}, status=400)
 
-        # 1. Manejar intenciones básicas primero
         intencion = self.detectar_intencion(pregunta)
         if intencion:
             return Response({
@@ -51,57 +80,37 @@ class ChatbotAPIView(APIView):
             if not documentos:
                 return Response({"respuesta": "No encontré información relevante para tu pregunta."}, status=200)
 
-            # 2. Búsqueda en FAQs con umbral estricto
-            mejor_doc_faq = None
-            mejor_score_faq = 0
-
+            # 1. Si encuentra una FAQ similar
             for doc in documentos:
                 if doc.metadata.get("source") == "faq":
-                    pregunta_csv = doc.metadata.get("pregunta_original", "")
-                    score = similitud_texto(pregunta, pregunta_csv)
-                    if score > mejor_score_faq:
-                        mejor_doc_faq = doc
-                        mejor_score_faq = score
+                    score = similitud_texto(pregunta, doc.metadata.get("pregunta_original", ""))
+                    if score >= 0.75:
+                        return Response({
+                            "respuesta": doc.metadata["respuesta_original"],
+                            "pregunta_relacionada": doc.metadata["pregunta_original"],
+                            "fuente": "FAQ",
+                            "metodo": "faq_similitud_validada",
+                            "similitud": round(score, 3)
+                        }, status=200)
 
-            if mejor_doc_faq and mejor_score_faq >= 0.75:
-                return Response({
-                    "respuesta": mejor_doc_faq.metadata["respuesta_original"],
-                    "pregunta_relacionada": mejor_doc_faq.metadata["pregunta_original"],
-                    "fuente": "FAQ",
-                    "metodo": "faq_similitud_validada",
-                    "similitud": round(mejor_score_faq, 3)
-                }, status=200)
+            # 2. Buscar en web/pdf con LLM como refuerzo
+            contexto = "\n\n".join([doc.page_content[:500] for doc in documentos])
+            prompt = f"""Eres un asistente académico del Departamento de Ciencias de la Computación de la ESPE.
+Responde a la siguiente pregunta utilizando solamente la siguiente información:
 
-            # 3. Búsqueda en otros documentos con umbral mínimo
-            mejor_doc_general = None
-            mejor_score_general = 0
-            umbral_minimo = 0.25  # Ajustar según necesidad
+Contexto:
+{contexto}
 
-            for doc in documentos:
-                if doc.metadata.get("source") != "faq":
-                    # Calcular similitud con el contenido del documento
-                    score = similitud_texto(pregunta, doc.page_content[:100])  # Comparar con inicio del contenido
-                    if score > mejor_score_general:
-                        mejor_doc_general = doc
-                        mejor_score_general = score
+Pregunta:
+{pregunta}
 
-            if mejor_doc_general and mejor_score_general >= umbral_minimo:
-                respuesta = mejor_doc_general.page_content[:400]
-                if len(mejor_doc_general.page_content) > 400:
-                    respuesta += "..."
-                return Response({
-                    "respuesta": respuesta,
-                    "fuente": mejor_doc_general.metadata.get("source", "desconocido"),
-                    "titulo": mejor_doc_general.metadata.get("titulo", ""),
-                    "metodo": mejor_doc_general.metadata.get("tipo", "documento"),
-                    "similitud": round(mejor_score_general, 3)
-                }, status=200)
+Respuesta:"""
 
-            # 4. Si no hay coincidencias válidas
+            respuesta_llm = consultar_llm_mistral(prompt)
             return Response({
-                "respuesta": "No encontré información relevante para tu pregunta. ¿Podrías reformularla o ser más específico?",
-                "fuente": "sistema",
-                "metodo": "sin_coincidencias_validas"
+                "respuesta": respuesta_llm,
+                "fuente": "LLM",
+                "metodo": "llm_mistral"
             }, status=200)
 
         except Exception as e:
@@ -109,7 +118,6 @@ class ChatbotAPIView(APIView):
                 "error": "Error interno del servidor",
                 "detalle": str(e)
             }, status=500)
-
 
 # Versión alternativa con búsqueda híbrida
 class ChatbotHibridoAPIView(APIView):
