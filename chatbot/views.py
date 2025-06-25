@@ -5,12 +5,15 @@ from rest_framework import status
 from difflib import SequenceMatcher
 import re
 import requests
+from dotenv import load_dotenv
+import os
 
 from .vector_store import buscar_documentos
 
 # API mejorada que maneja correctamente las respuestas del CSV
 # Función para calcular similitud entre textos
-OPENAI_API_KEY = "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"  # Pega aquí tu clave real
+load_dotenv()  # Cargar variables de entorno desde .env
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # --------- FUNCIONES AUXILIARES ---------
 
