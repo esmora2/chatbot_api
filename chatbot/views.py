@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 import os
 
 from .vector_store import buscar_documentos
+import fitz
 
 # API mejorada que maneja correctamente las respuestas del CSV
 # Función para calcular similitud entre textos
