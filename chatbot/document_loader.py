@@ -48,7 +48,19 @@ def cargar_documentos():
     # 1. Cargar CSV de FAQ
     faq_csv = os.path.join(BASE_DIR, "basecsvf.csv")
     if os.path.exists(faq_csv):
-        df = pd.read_csv(faq_csv)
+        try:
+            # Intentar leer el CSV con diferentes configuraciones para manejar problemas de formato
+            df = pd.read_csv(faq_csv, quotechar='"', skipinitialspace=True, on_bad_lines='skip')
+        except pd.errors.ParserError as e:
+            print(f"Error al parsear CSV: {e}")
+            # Intentar con configuración más flexible
+            try:
+                df = pd.read_csv(faq_csv, sep=',', quotechar='"', escapechar='\\', on_bad_lines='skip')
+            except Exception as backup_error:
+                print(f"Error de backup al parsear CSV: {backup_error}")
+                # Si todo falla, crear un DataFrame vacío para continuar
+                df = pd.DataFrame(columns=['Pregunta', 'Respuesta'])
+        
         df = df.dropna(subset=["Pregunta", "Respuesta"])
 
         for _, row in df.iterrows():

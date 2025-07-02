@@ -1,0 +1,6 @@
+projectKey=Backend-Chatbot
+serverUrl=http://localhost:9000
+serverVersion=25.1.0.102122
+dashboardUrl=http://localhost:9000/dashboard?id=Backend-Chatbot
+ceTaskId=e080bdfc-ffb1-4846-863b-3dff2731ea8a
+ceTaskUrl=http://localhost:9000/api/ce/task?id=e080bdfc-ffb1-4846-863b-3dff2731ea8a
