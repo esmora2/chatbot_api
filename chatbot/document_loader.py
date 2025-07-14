@@ -4,6 +4,11 @@ import re
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
+import csv
+from django.utils import timezone
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Ruta base de documentos
 BASE_DIR = os.path.join("media", "docs")
@@ -111,3 +116,145 @@ def cargar_documentos():
                 all_docs.append(doc)
 
     return all_docs
+
+
+def agregar_faq_entry(pregunta, respuesta):
+    """
+    Agrega una nueva entrada al archivo CSV de FAQ
+    
+    Args:
+        pregunta (str): La pregunta a agregar
+        respuesta (str): La respuesta correspondiente
+    
+    Returns:
+        dict: Resultado de la operación con éxito/error
+    """
+    faq_csv = os.path.join(BASE_DIR, "basecsvf.csv")
+    
+    try:
+        # Crear directorio si no existe
+        os.makedirs(BASE_DIR, exist_ok=True)
+        
+        # Verificar si el archivo existe, si no, crearlo con headers
+        file_exists = os.path.exists(faq_csv)
+        
+        # Preparar los datos
+        nueva_entrada = {
+            'Pregunta': pregunta.strip(),
+            'Respuesta': respuesta.strip(),
+            'Fecha_Agregado': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        # Escribir al CSV
+        with open(faq_csv, 'a', newline='', encoding='utf-8') as csvfile:
+            fieldnames = ['Pregunta', 'Respuesta', 'Fecha_Agregado']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            
+            # Si el archivo es nuevo, escribir los headers
+            if not file_exists or os.path.getsize(faq_csv) == 0:
+                writer.writeheader()
+            
+            writer.writerow(nueva_entrada)
+        
+        logger.info(f"FAQ agregado exitosamente: {pregunta[:50]}...")
+        
+        return {
+            'success': True,
+            'message': 'FAQ agregado exitosamente',
+            'entrada': nueva_entrada
+        }
+        
+    except Exception as e:
+        logger.error(f"Error al agregar FAQ: {str(e)}")
+        return {
+            'success': False,
+            'message': f'Error al agregar FAQ: {str(e)}',
+            'entrada': None
+        }
+
+
+def validar_faq_duplicado(pregunta, umbral_similitud=0.8):
+    """
+    Verifica si ya existe una pregunta similar en el FAQ
+    
+    Args:
+        pregunta (str): La pregunta a verificar
+        umbral_similitud (float): Umbral de similitud para considerar duplicado
+    
+    Returns:
+        dict: Información sobre duplicados encontrados
+    """
+    faq_csv = os.path.join(BASE_DIR, "basecsvf.csv")
+    
+    if not os.path.exists(faq_csv):
+        return {'es_duplicado': False, 'pregunta_similar': None, 'similitud': 0}
+    
+    try:
+        df = pd.read_csv(faq_csv, quotechar='"', skipinitialspace=True, on_bad_lines='skip')
+        df = df.dropna(subset=["Pregunta"])
+        
+        pregunta_lower = pregunta.lower().strip()
+        max_similitud = 0
+        pregunta_similar = None
+        
+        for _, row in df.iterrows():
+            pregunta_existente = str(row['Pregunta']).lower().strip()
+            
+            # Calcular similitud usando SequenceMatcher
+            from difflib import SequenceMatcher
+            similitud = SequenceMatcher(None, pregunta_lower, pregunta_existente).ratio()
+            
+            if similitud > max_similitud:
+                max_similitud = similitud
+                pregunta_similar = str(row['Pregunta'])
+        
+        es_duplicado = max_similitud >= umbral_similitud
+        
+        return {
+            'es_duplicado': es_duplicado,
+            'pregunta_similar': pregunta_similar if es_duplicado else None,
+            'similitud': max_similitud
+        }
+        
+    except Exception as e:
+        logger.error(f"Error al validar duplicados: {str(e)}")
+        return {'es_duplicado': False, 'pregunta_similar': None, 'similitud': 0}
+
+
+def obtener_estadisticas_faq():
+    """
+    Obtiene estadísticas básicas del archivo FAQ
+    
+    Returns:
+        dict: Estadísticas del FAQ
+    """
+    faq_csv = os.path.join(BASE_DIR, "basecsvf.csv")
+    
+    if not os.path.exists(faq_csv):
+        return {
+            'total_preguntas': 0,
+            'archivo_existe': False,
+            'tamaño_archivo': 0
+        }
+    
+    try:
+        df = pd.read_csv(faq_csv, quotechar='"', skipinitialspace=True, on_bad_lines='skip')
+        df = df.dropna(subset=["Pregunta", "Respuesta"])
+        
+        return {
+            'total_preguntas': len(df),
+            'archivo_existe': True,
+            'tamaño_archivo': os.path.getsize(faq_csv),
+            'ultima_modificacion': timezone.datetime.fromtimestamp(
+                os.path.getmtime(faq_csv)
+            ).strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+    except Exception as e:
+        logger.error(f"Error al obtener estadísticas: {str(e)}")
+        return {
+            'total_preguntas': 0,
+            'archivo_existe': True,
+            'tamaño_archivo': os.path.getsize(faq_csv),
+            'error': str(e)
+        }

@@ -5,11 +5,15 @@ from rest_framework.response import Response
 from django.utils import timezone 
 from django.http import Http404
 from rest_framework import status
+from rest_framework.permissions import AllowAny
 from difflib import SequenceMatcher
 import re
 import requests
 
 from .vector_store import buscar_documentos
+from .serializers import FAQEntrySerializer, ChatbotQuerySerializer
+from .authentication import FAQTokenAuthentication, PublicAuthentication
+from .document_loader import agregar_faq_entry, validar_faq_duplicado, obtener_estadisticas_faq
 
 import logging
 
@@ -50,6 +54,9 @@ def consultar_openai(prompt):
 # --------- CLASE PRINCIPAL DE LA API ---------
 
 class ChatbotAPIView(APIView):
+    authentication_classes = [PublicAuthentication]
+    permission_classes = [AllowAny]
+    
     INTENCIONES_BASICAS = {
         "saludos": ["hola", "buenos días", "buenas tardes", "hi", "hello"],
         "despedidas": ["adiós", "hasta luego", "nos vemos", "bye"],
@@ -376,3 +383,122 @@ class KnowledgeBaseAPIView(APIView):
 
         self._write_rows(new_rows)
         return Response({"message": "Entrada eliminada"})
+
+class FAQManagementAPIView(APIView):
+    """
+    Endpoint protegido para agregar preguntas y respuestas al FAQ
+    Requiere token de autorización: Bearer your-secure-token-here-change-in-production
+    """
+    authentication_classes = [FAQTokenAuthentication]
+    permission_classes = [AllowAny]  # La autenticación se maneja en FAQTokenAuthentication
+    
+    def post(self, request):
+        """
+        Agregar nueva entrada al FAQ
+        
+        Body JSON:
+        {
+            "pregunta": "¿Cuál es el horario de atención?",
+            "respuesta": "El horario de atención es de 8:00 a 17:00",
+            "verificar_duplicados": true  # opcional, por defecto true
+        }
+        """
+        serializer = FAQEntrySerializer(data=request.data)
+        
+        if not serializer.is_valid():
+            return Response({
+                'error': 'Datos inválidos',
+                'detalles': serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        pregunta = serializer.validated_data['pregunta']
+        respuesta = serializer.validated_data['respuesta']
+        verificar_duplicados = request.data.get('verificar_duplicados', True)
+        
+        # Verificar duplicados si está habilitado
+        if verificar_duplicados:
+            duplicado_info = validar_faq_duplicado(pregunta)
+            if duplicado_info['es_duplicado']:
+                return Response({
+                    'error': 'Pregunta duplicada detectada',
+                    'pregunta_similar': duplicado_info['pregunta_similar'],
+                    'similitud': duplicado_info['similitud'],
+                    'sugerencia': 'Use forzar=true para agregar de todos modos'
+                }, status=status.HTTP_409_CONFLICT)
+        
+        # Verificar si se está forzando a pesar de duplicados
+        forzar = request.data.get('forzar', False)
+        if not verificar_duplicados or not duplicado_info['es_duplicado'] or forzar:
+            resultado = agregar_faq_entry(pregunta, respuesta)
+            
+            if resultado['success']:
+                return Response({
+                    'mensaje': 'FAQ agregado exitosamente',
+                    'entrada': resultado['entrada'],
+                    'estadisticas': obtener_estadisticas_faq()
+                }, status=status.HTTP_201_CREATED)
+            else:
+                return Response({
+                    'error': 'Error al agregar FAQ',
+                    'detalle': resultado['message']
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        return Response({
+            'error': 'Operación no permitida'
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    def get(self, request):
+        """
+        Obtener estadísticas del FAQ
+        """
+        estadisticas = obtener_estadisticas_faq()
+        return Response({
+            'estadisticas': estadisticas,
+            'mensaje': 'Estadísticas del FAQ obtenidas exitosamente'
+        }, status=status.HTTP_200_OK)
+
+
+class FAQDuplicateCheckAPIView(APIView):
+    """
+    Endpoint protegido para verificar duplicados en el FAQ
+    """
+    authentication_classes = [FAQTokenAuthentication]
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        """
+        Verificar si una pregunta ya existe en el FAQ
+        
+        Body JSON:
+        {
+            "pregunta": "¿Cuál es el horario?",
+            "umbral_similitud": 0.8  # opcional, por defecto 0.8
+        }
+        """
+        pregunta = request.data.get('pregunta')
+        if not pregunta:
+            return Response({
+                'error': 'El campo pregunta es requerido'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        umbral = request.data.get('umbral_similitud', 0.8)
+        
+        try:
+            umbral = float(umbral)
+            if not 0 <= umbral <= 1:
+                raise ValueError()
+        except (ValueError, TypeError):
+            return Response({
+                'error': 'umbral_similitud debe ser un número entre 0 y 1'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        resultado = validar_faq_duplicado(pregunta, umbral)
+        
+        return Response({
+            'pregunta_consultada': pregunta,
+            'umbral_usado': umbral,
+            'es_duplicado': resultado['es_duplicado'],
+            'pregunta_similar': resultado['pregunta_similar'],
+            'similitud': resultado['similitud'],
+            'recomendacion': 'No agregar' if resultado['es_duplicado'] else 'Puede agregar'
+        }, status=status.HTTP_200_OK)

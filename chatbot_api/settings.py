@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'rest_framework.authtoken',
     'corsheaders',
     'chatbot',
 ]
@@ -157,3 +158,17 @@ CORS_ALLOW_METHODS = [
     'POST',
     'PUT',
 ]
+
+# Django REST Framework Configuration
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.TokenAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.AllowAny',  # Cambiado a AllowAny para permitir acceso
+    ],
+}
+
+# Custom token for FAQ management
+FAQ_MANAGEMENT_TOKEN = 'your-secure-token-here-change-in-production'
