@@ -605,7 +605,8 @@ class FAQManagementAPIView(APIView):
                 return Response({
                     'mensaje': 'FAQ agregado exitosamente',
                     'entrada': resultado['entrada'],
-                    'estadisticas': obtener_estadisticas_faq()
+                    'estadisticas': obtener_estadisticas_faq(),
+                    'synced_to_s3': resultado.get('synced_to_s3', False)  # 🚀 Agregado
                 }, status=status.HTTP_201_CREATED)
             else:
                 return Response({

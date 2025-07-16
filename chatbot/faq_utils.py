@@ -1,6 +1,9 @@
 import pandas as pd
 import os
 import csv
+import tempfile
+import boto3
+from django.conf import settings
 from django.utils import timezone
 import logging
 
@@ -8,6 +11,34 @@ logger = logging.getLogger(__name__)
 
 # Ruta base de documentos
 BASE_DIR = os.path.join("media", "docs")
+
+def get_s3_client():
+    """Obtiene cliente S3 configurado"""
+    return boto3.client(
+        's3',
+        aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+        aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+        region_name=settings.AWS_S3_REGION_NAME
+    )
+
+def sync_faq_to_s3_simple():
+    """Sincroniza el archivo FAQ local con S3"""
+    try:
+        local_csv = os.path.join(BASE_DIR, "basecsvf.csv")
+        if not os.path.exists(local_csv):
+            return False
+            
+        s3_client = get_s3_client()
+        s3_key = "media/docs/basecsvf.csv"
+        
+        s3_client.upload_file(local_csv, settings.AWS_STORAGE_BUCKET_NAME, s3_key)
+        
+        logger.info(f"✅ CSV FAQ sincronizado con S3 exitosamente")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Error sincronizando FAQ con S3: {e}")
+        return False
 
 
 def agregar_faq_entry_simple(pregunta, respuesta, categoria="General"):
@@ -59,10 +90,14 @@ def agregar_faq_entry_simple(pregunta, respuesta, categoria="General"):
         
         logger.info(f"FAQ agregado exitosamente con ID {next_id}: {pregunta[:50]}...")
         
+        # 🚀 NUEVO: Sincronizar con S3 automáticamente
+        sync_success = sync_faq_to_s3_simple()
+        
         return {
             'success': True,
             'message': 'FAQ agregado exitosamente',
-            'entrada': nueva_entrada
+            'entrada': nueva_entrada,
+            'synced_to_s3': sync_success  # Indica si se subió a S3
         }
         
     except Exception as e:

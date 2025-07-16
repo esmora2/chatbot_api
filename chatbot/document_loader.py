@@ -1,6 +1,9 @@
 import pandas as pd
 import os
 import re
+import tempfile
+import boto3
+from django.conf import settings
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
@@ -307,6 +310,29 @@ def cargar_documentos():
     return all_docs
 
 
+def upload_csv_to_s3(local_path, s3_filename):
+    """Sube un archivo CSV local a S3"""
+    try:
+        s3_client = get_s3_client()
+        s3_key = f"media/docs/{s3_filename}"
+        
+        s3_client.upload_file(local_path, settings.AWS_STORAGE_BUCKET_NAME, s3_key)
+        
+        logger.info(f"✅ CSV subido a S3: {s3_filename}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Error subiendo CSV a S3: {e}")
+        return False
+
+def sync_faq_to_s3():
+    """Sincroniza el archivo FAQ local con S3"""
+    local_csv = os.path.join(BASE_DIR, "basecsvf.csv")
+    if os.path.exists(local_csv):
+        return upload_csv_to_s3(local_csv, "basecsvf.csv")
+    return False
+
+
 def agregar_faq_entry(pregunta, respuesta):
     """
     Agrega una nueva entrada al archivo CSV de FAQ
@@ -347,10 +373,14 @@ def agregar_faq_entry(pregunta, respuesta):
         
         logger.info(f"FAQ agregado exitosamente: {pregunta[:50]}...")
         
+        # 🚀 NUEVO: Sincronizar con S3 automáticamente
+        sync_success = sync_faq_to_s3()
+        
         return {
             'success': True,
             'message': 'FAQ agregado exitosamente',
-            'entrada': nueva_entrada
+            'entrada': nueva_entrada,
+            'synced_to_s3': sync_success  # Indica si se subió a S3
         }
         
     except Exception as e:
