@@ -7,11 +7,101 @@ from langchain.schema import Document
 import csv
 from django.utils import timezone
 import logging
+import boto3
+from botocore.exceptions import ClientError
+import tempfile
+from django.conf import settings
+import requests
 
 logger = logging.getLogger(__name__)
 
 # Ruta base de documentos
 BASE_DIR = os.path.join("media", "docs")
+
+def get_s3_client():
+    """Obtiene cliente S3 configurado"""
+    return boto3.client(
+        's3',
+        aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+        aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+        region_name=settings.AWS_S3_REGION_NAME
+    )
+
+def download_from_s3(filename):
+    """Descarga un archivo desde S3 a un archivo temporal"""
+    try:
+        s3_client = get_s3_client()
+        s3_key = f"media/docs/{filename}"
+        
+        # Crear archivo temporal
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1])
+        temp_file.close()
+        
+        # Descargar desde S3
+        s3_client.download_file(settings.AWS_STORAGE_BUCKET_NAME, s3_key, temp_file.name)
+        
+        return temp_file.name
+        
+    except Exception as e:
+        logger.error(f"Error descargando {filename} desde S3: {e}")
+        return None
+
+def get_file_from_s3_or_local(filename):
+    """Obtiene archivo desde S3 o desde el directorio local como fallback"""
+    # Intentar primero desde S3
+    temp_path = download_from_s3(filename)
+    if temp_path:
+        return temp_path, True  # True indica que es temporal
+    
+    # Fallback a archivo local
+    local_path = os.path.join(BASE_DIR, filename)
+    if os.path.exists(local_path):
+        return local_path, False  # False indica que no es temporal
+    
+    return None, False
+
+def download_csv_from_s3(filename):
+    """Descarga y lee un CSV desde S3"""
+    try:
+        s3_client = get_s3_client()
+        s3_key = f"media/docs/{filename}"
+        
+        # Obtener el objeto desde S3
+        response = s3_client.get_object(Bucket=settings.AWS_STORAGE_BUCKET_NAME, Key=s3_key)
+        csv_content = response['Body'].read().decode('utf-8')
+        
+        # Crear archivo temporal
+        temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv')
+        temp_file.write(csv_content)
+        temp_file.close()
+        
+        return temp_file.name
+        
+    except Exception as e:
+        logger.error(f"Error descargando CSV {filename} desde S3: {e}")
+        return None
+
+def list_s3_files():
+    """Lista archivos en S3"""
+    try:
+        s3_client = get_s3_client()
+        response = s3_client.list_objects_v2(
+            Bucket=settings.AWS_STORAGE_BUCKET_NAME,
+            Prefix='media/docs/'
+        )
+        
+        files = []
+        if 'Contents' in response:
+            for obj in response['Contents']:
+                filename = obj['Key'].replace('media/docs/', '')
+                if filename:  # Ignorar carpetas vacías
+                    files.append(filename)
+        
+        return files
+        
+    except Exception as e:
+        logger.error(f"Error listando archivos S3: {e}")
+        return []
 
 def limpiar_contenido_web(texto):
     """
@@ -50,72 +140,120 @@ def limpiar_contenido_web(texto):
 def cargar_documentos():
     all_docs = []
 
-    # 1. Cargar CSV de FAQ
-    faq_csv = os.path.join(BASE_DIR, "basecsvf.csv")
-    if os.path.exists(faq_csv):
+    # 1. Cargar CSV de FAQ desde S3
+    faq_csv_temp = download_csv_from_s3("basecsvf.csv")
+    if faq_csv_temp:
         try:
             # Intentar leer el CSV con diferentes configuraciones para manejar problemas de formato
-            df = pd.read_csv(faq_csv, quotechar='"', skipinitialspace=True, on_bad_lines='skip')
-        except pd.errors.ParserError as e:
-            print(f"Error al parsear CSV: {e}")
-            # Intentar con configuración más flexible
-            try:
-                df = pd.read_csv(faq_csv, sep=',', quotechar='"', escapechar='\\', on_bad_lines='skip')
-            except Exception as backup_error:
-                print(f"Error de backup al parsear CSV: {backup_error}")
-                # Si todo falla, crear un DataFrame vacío para continuar
-                df = pd.DataFrame(columns=['Pregunta', 'Respuesta'])
-        
-        df = df.dropna(subset=["Pregunta", "Respuesta"])
+            df = pd.read_csv(faq_csv_temp, quotechar='"', skipinitialspace=True, on_bad_lines='skip')
+            
+            # Verificar que tenga las columnas esperadas (con flexibilidad en mayúsculas/minúsculas)
+            columns_lower = [col.lower() for col in df.columns]
+            if 'pregunta' in columns_lower and 'respuesta' in columns_lower:
+                # Normalizar nombres de columnas
+                df.columns = [col.lower().capitalize() for col in df.columns]
+                df = df.dropna(subset=["Pregunta", "Respuesta"])
 
-        for _, row in df.iterrows():
-            contenido = f"Pregunta: {row['Pregunta']}\nRespuesta: {row['Respuesta']}"
-            doc = Document(
-                page_content=contenido,
-                metadata={
-                    "source": "faq",
-                    "tipo": "faq",
-                    "pregunta_original": row["Pregunta"],
-                    "respuesta_original": row["Respuesta"]
-                }
-            )
-            all_docs.append(doc)
+                for _, row in df.iterrows():
+                    contenido = f"Pregunta: {row['Pregunta']}\nRespuesta: {row['Respuesta']}"
+                    doc = Document(
+                        page_content=contenido,
+                        metadata={
+                            "source": "faq",
+                            "tipo": "faq",
+                            "pregunta_original": row["Pregunta"],
+                            "respuesta_original": row["Respuesta"]
+                        }
+                    )
+                    all_docs.append(doc)
+                    
+                logger.info(f"✅ CSV FAQ cargado desde S3: {len(df)} entradas")
+            else:
+                logger.warning(f"CSV no tiene las columnas esperadas. Columnas encontradas: {df.columns.tolist()}")
+                logger.warning("Columnas esperadas: 'Pregunta' y 'Respuesta'")
+                
+        except Exception as e:
+            logger.error(f"Error al parsear CSV desde S3: {e}")
+        finally:
+            # Limpiar archivo temporal
+            if os.path.exists(faq_csv_temp):
+                os.unlink(faq_csv_temp)
+    else:
+        # Fallback a archivo local
+        faq_csv = os.path.join(BASE_DIR, "basecsvf.csv")
+        if os.path.exists(faq_csv):
+            try:
+                df = pd.read_csv(faq_csv, quotechar='"', skipinitialspace=True, on_bad_lines='skip')
+                if 'Pregunta' in df.columns and 'Respuesta' in df.columns:
+                    df = df.dropna(subset=["Pregunta", "Respuesta"])
+                    for _, row in df.iterrows():
+                        contenido = f"Pregunta: {row['Pregunta']}\nRespuesta: {row['Respuesta']}"
+                        doc = Document(
+                            page_content=contenido,
+                            metadata={
+                                "source": "faq",
+                                "tipo": "faq",
+                                "pregunta_original": row["Pregunta"],
+                                "respuesta_original": row["Respuesta"]
+                            }
+                        )
+                        all_docs.append(doc)
+                    logger.info(f"✅ CSV FAQ cargado localmente: {len(df)} entradas")
+            except Exception as e:
+                logger.error(f"Error al parsear CSV local: {e}")
 
     # 2. Cargar contenido web DCCO (scraping limpio)
-    web_csv = os.path.join(BASE_DIR, "contenido_web_dcco.csv")
-    if os.path.exists(web_csv):
-        df = pd.read_csv(web_csv)
-        df = df.dropna(subset=["Titulo", "Contenido"])
+    web_csv_temp = download_csv_from_s3("contenido_web_dcco.csv")
+    if web_csv_temp:
+        try:
+            df = pd.read_csv(web_csv_temp)
+            df = df.dropna(subset=["Titulo", "Contenido"])
 
-        for _, row in df.iterrows():
-            contenido_limpio = limpiar_contenido_web(row["Contenido"])
-            doc = Document(
-                page_content=contenido_limpio,
-                metadata={
-                    "source": "web",
-                    "tipo": "web",
-                    "titulo": row["Titulo"],
-                    "url": row.get("URL", "")
-                }
-            )
-            all_docs.append(doc)
-            print(f"[WEB] {row['Titulo']} cargado desde {row.get('URL', '')}")
+            for _, row in df.iterrows():
+                contenido_limpio = limpiar_contenido_web(row["Contenido"])
+                doc = Document(
+                    page_content=contenido_limpio,
+                    metadata={
+                        "source": "web",
+                        "tipo": "web",
+                        "titulo": row["Titulo"],
+                        "url": row.get("URL", "")
+                    }
+                )
+                all_docs.append(doc)
+                logger.info(f"[WEB] {row['Titulo']} cargado desde {row.get('URL', '')}")
+        except Exception as e:
+            logger.error(f"Error cargando contenido web desde S3: {e}")
+        finally:
+            if os.path.exists(web_csv_temp):
+                os.unlink(web_csv_temp)
 
-    # 3. Cargar PDFs
+    # 3. Cargar PDFs desde S3
     pdf_count = 0
     pdf_chunks_total = 0
     
     try:
-        pdf_files = [f for f in os.listdir(BASE_DIR) if f.endswith(".pdf")]
-        logger.info(f"Encontrados {len(pdf_files)} archivos PDF en {BASE_DIR}")
+        # Listar archivos PDF en S3
+        s3_files = list_s3_files()
+        pdf_files = [f for f in s3_files if f.endswith(".pdf")]
+        logger.info(f"Encontrados {len(pdf_files)} archivos PDF en S3")
         
         for filename in pdf_files:
             try:
-                pdf_path = os.path.join(BASE_DIR, filename)
-                logger.info(f"Cargando PDF: {filename}")
+                logger.info(f"Cargando PDF desde S3: {filename}")
+                
+                # Descargar PDF desde S3
+                pdf_path, is_temp = get_file_from_s3_or_local(filename)
+                if not pdf_path:
+                    logger.error(f"No se pudo obtener el PDF: {filename}")
+                    continue
                 
                 loader = PyMuPDFLoader(pdf_path)
                 raw_docs = loader.load()
+                
+                # Limpiar archivo temporal si es necesario
+                if is_temp:
+                    os.unlink(pdf_path)
                 
                 if not raw_docs:
                     logger.warning(f"PDF {filename} está vacío o no se pudo leer")
@@ -151,16 +289,20 @@ def cargar_documentos():
                 
                 pdf_count += 1
                 pdf_chunks_total += chunks_count
-                logger.info(f"✅ PDF {filename} cargado: {chunks_count} chunks válidos de {len(split_docs)} totales")
+                logger.info(f"✅ PDF {filename} cargado desde S3: {chunks_count} chunks válidos de {len(split_docs)} totales")
                 
             except Exception as e:
-                logger.error(f"❌ Error cargando PDF {filename}: {str(e)}")
+                logger.error(f"❌ Error cargando PDF {filename} desde S3: {str(e)}")
                 continue
                 
     except Exception as e:
-        logger.error(f"❌ Error accediendo al directorio de PDFs: {str(e)}")
+        logger.error(f"❌ Error accediendo a archivos PDF en S3: {str(e)}")
     
     logger.info(f"📊 Total PDFs cargados: {pdf_count}, Total chunks: {pdf_chunks_total}")
+    logger.info(f"📊 Total documentos cargados: {len(all_docs)}")
+    
+    logger.info(f"📊 Total PDFs cargados: {pdf_count}, Total chunks: {pdf_chunks_total}")
+    logger.info(f"📊 Total documentos cargados: {len(all_docs)}")
     
     return all_docs
 

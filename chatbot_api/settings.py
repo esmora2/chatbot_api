@@ -11,6 +11,11 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 from pathlib import Path
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -20,10 +25,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-3gca(w%0d+(+(1&=byvba)mpvabl(fijhvj+8#%fkxqc8=22+o'
+SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-3gca(w%0d+(+(1&=byvba)mpvabl(fijhvj+8#%fkxqc8=22+o')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv('DEBUG', 'True').lower() == 'true'
 
 ALLOWED_HOSTS = ['*']
 
@@ -40,6 +45,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework.authtoken',
     'corsheaders',
+    'storages',
     'chatbot',
 ]
 
@@ -132,6 +138,38 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:3000",
 ]
 
+# Configuracion S3 y CloudFront
+# AWS S3 Configuration
+AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
+AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
+AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_STORAGE_BUCKET_NAME')
+AWS_S3_REGION_NAME = os.getenv('AWS_S3_REGION_NAME', 'us-east-1')
+AWS_S3_CUSTOM_DOMAIN = os.getenv('AWS_S3_CUSTOM_DOMAIN')
+
+# S3 Settings
+AWS_S3_OBJECT_PARAMETERS = {
+    'CacheControl': 'max-age=86400',  # 🔥 Mejora rendimiento con caché
+}
+AWS_LOCATION = 'media/docs'  # Carpeta en S3 donde se almacenarán los documentos
+AWS_S3_FILE_OVERWRITE = False
+AWS_QUERYSTRING_AUTH = False
+
+# Storage backends
+DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+STATICFILES_STORAGE = 'storages.backends.s3boto3.S3StaticStorage'
+
+# Media files configuration
+MEDIA_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/{AWS_LOCATION}/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+# Static files configuration
+STATIC_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
+# SendGrid Configuration (opcional)
+SENDGRID_API_KEY = os.getenv('SENDGRID_API_KEY')
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'noreply@yourdomain.com')
+
 # Permitir todas las cabeceras para desarrollo
 CORS_ALLOW_ALL_ORIGINS = True  # Solo para desarrollo
 CORS_ALLOW_CREDENTIALS = True
@@ -171,4 +209,4 @@ REST_FRAMEWORK = {
 }
 
 # Custom token for FAQ management
-FAQ_MANAGEMENT_TOKEN = 'your-secure-token-here-change-in-production'
+FAQ_MANAGEMENT_TOKEN = os.getenv('FAQ_MANAGEMENT_TOKEN', 'your-secure-token-here-change-in-production')
