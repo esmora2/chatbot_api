@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 id,Pregunta,Respuesta,Categoría,fechaCreacion,fechaModificacion
 1,¿Que es ingenieria de software?,Es la aplicación de principios de ingeniería al desarrollo mantenimiento y gestión de software,,,2025-06-30T01:03:49.200237+00:00
 2,¿Dónde se encuentra el departamento de computación?,El departamento de ciencias de la computación se encuentra dentro del bloque H en el campus de la Universidad,,,
@@ -8,6 +9,15 @@ id,Pregunta,Respuesta,Categoría,fechaCreacion,fechaModificacion
 7,¿Cuántos accesos exiten en la matriz de la universidad,Dos accesos  para vehiculos y peatones,,,
 8,¿El departamento de computación cuenta con algún club?,"Si, el club de Software",,,
 9,¿Cuáles son mis derechos como estudiante?,"Según el articulo 5 de la LOES, los derechos de los estudiantes son:
+=======
+﻿Pregunta,Respuesta
+¿Dónde se encuentra el departamento de computación?,El departamento de ciencias de la computación se encuentra dentro del bloque H en el campus de la Universidad 
+¿Dónde se encuentra el psicólogo de la universidad? ,"En bienestar estudiantil, junto al bar "
+¿Cada cuánto tiempo se da las becas economicas?,Una vez al año
+¿Cuántos accesos exiten en la matriz de la universidad ,Dos accesos  para vehiculos y peatones
+¿El departamento de computación cuenta con algún club?,"Si, el club de Software"
+¿Cuáles son mis derechos como estudiante?,"Según el articulo 5 de la LOES, los derechos de los estudiantes son:
+>>>>>>> Stashed changes
 
 a) Acceder, movilizarse, permanecer, egresar y titularse sin discriminación conforme sus méritos académicos.
 
