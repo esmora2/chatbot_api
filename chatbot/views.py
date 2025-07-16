@@ -56,6 +56,7 @@ def es_pregunta_fuera_contexto(pregunta):
         "programación", "software", "hardware", "algoritmo", "base de datos",
         "redes", "sistemas", "ingeniería", "desarrollo", "código", "aplicación",
         "web", "móvil", "inteligencia artificial", "machine learning",
+        "aplicaciones", "conocimiento", "basadas", "expertos", "ia",
         
         # Procesos universitarios
         "admisión", "requisitos", "documentos", "certificado", "horario",
@@ -114,12 +115,16 @@ def validar_relevancia_respuesta(pregunta, respuesta, documentos):
     if not documentos:
         return False
     
+    # Si hay documentos PDF, ser más permisivo
+    tiene_pdf = any(doc.metadata.get("source") == "pdf" for doc in documentos)
+    
     # Calcular relevancia promedio de los documentos encontrados
     relevancia_promedio = 0
     documentos_validos = 0
     
     for doc in documentos:
-        if doc.metadata.get("source") in ["faq", "web"]:
+        # Incluir todos los tipos de documentos (FAQ, web, PDF)
+        if doc.metadata.get("source") in ["faq", "web", "pdf"]:
             score = similitud_texto(pregunta, doc.page_content[:200])
             relevancia_promedio += score
             documentos_validos += 1
@@ -127,15 +132,21 @@ def validar_relevancia_respuesta(pregunta, respuesta, documentos):
     if documentos_validos > 0:
         relevancia_promedio /= documentos_validos
     
-    # Si la relevancia promedio es muy baja, la respuesta no es confiable
-    if relevancia_promedio < 0.15:
+    # Ajustar umbral basado en el tipo de documentos
+    umbral = 0.01 if tiene_pdf else 0.05
+    if relevancia_promedio < umbral:
         return False
+    
+    # Si la respuesta está vacía (llamada previa), permitir continuar
+    if not respuesta.strip():
+        return True
     
     # Verificar si la respuesta contiene información específica del DCCO/ESPE
     respuesta_lower = respuesta.lower()
     indicadores_especificos = [
         "espe", "dcco", "departamento", "computación", "universidad",
-        "estudiante", "curso", "materia", "profesor", "carrera"
+        "estudiante", "curso", "materia", "profesor", "carrera",
+        "syllabus", "programa", "aplicaciones", "conocimiento", "software"
     ]
     
     tiene_indicadores = any(indicador in respuesta_lower for indicador in indicadores_especificos)

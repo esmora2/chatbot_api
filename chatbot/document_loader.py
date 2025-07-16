@@ -102,19 +102,66 @@ def cargar_documentos():
             print(f"[WEB] {row['Titulo']} cargado desde {row.get('URL', '')}")
 
     # 3. Cargar PDFs
-    for filename in os.listdir(BASE_DIR):
-        if filename.endswith(".pdf"):
-            loader = PyMuPDFLoader(os.path.join(BASE_DIR, filename))
-            raw_docs = loader.load()
-
-            splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-            split_docs = splitter.split_documents(raw_docs)
-
-            for doc in split_docs:
-                doc.metadata["source"] = filename
-                doc.metadata["tipo"] = "pdf"
-                all_docs.append(doc)
-
+    pdf_count = 0
+    pdf_chunks_total = 0
+    
+    try:
+        pdf_files = [f for f in os.listdir(BASE_DIR) if f.endswith(".pdf")]
+        logger.info(f"Encontrados {len(pdf_files)} archivos PDF en {BASE_DIR}")
+        
+        for filename in pdf_files:
+            try:
+                pdf_path = os.path.join(BASE_DIR, filename)
+                logger.info(f"Cargando PDF: {filename}")
+                
+                loader = PyMuPDFLoader(pdf_path)
+                raw_docs = loader.load()
+                
+                if not raw_docs:
+                    logger.warning(f"PDF {filename} está vacío o no se pudo leer")
+                    continue
+                
+                # Verificar contenido antes de dividir
+                total_content = "".join([doc.page_content for doc in raw_docs])
+                if len(total_content.strip()) < 100:
+                    logger.warning(f"PDF {filename} tiene muy poco contenido: {len(total_content)} caracteres")
+                
+                splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=500, 
+                    chunk_overlap=50,
+                    separators=["\n\n", "\n", " ", ""]
+                )
+                split_docs = splitter.split_documents(raw_docs)
+                
+                chunks_count = 0
+                for i, doc in enumerate(split_docs):
+                    if len(doc.page_content.strip()) < 50:  # Filtrar chunks muy pequeños
+                        continue
+                        
+                    doc.metadata.update({
+                        "source": "pdf",
+                        "filename": filename,
+                        "chunk_id": i,
+                        "tipo": "pdf",
+                        "tipo_documento": "pdf_syllabus",
+                        "total_chunks": len(split_docs)
+                    })
+                    all_docs.append(doc)
+                    chunks_count += 1
+                
+                pdf_count += 1
+                pdf_chunks_total += chunks_count
+                logger.info(f"✅ PDF {filename} cargado: {chunks_count} chunks válidos de {len(split_docs)} totales")
+                
+            except Exception as e:
+                logger.error(f"❌ Error cargando PDF {filename}: {str(e)}")
+                continue
+                
+    except Exception as e:
+        logger.error(f"❌ Error accediendo al directorio de PDFs: {str(e)}")
+    
+    logger.info(f"📊 Total PDFs cargados: {pdf_count}, Total chunks: {pdf_chunks_total}")
+    
     return all_docs
 
 
