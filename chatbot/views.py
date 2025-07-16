@@ -28,6 +28,137 @@ OPENAI_API_KEY = "sk-proj-MAPsJLNHO0mALjb9JCDRtuuXJOaROEQ1Jk_lhLcPJ_Ng8ywYZtg2jN
 def similitud_texto(a, b):
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
+def es_pregunta_fuera_contexto(pregunta):
+    """
+    Detecta si una pregunta está fuera del contexto del DCCO/ESPE
+    """
+    pregunta_lower = pregunta.lower().strip()
+    
+    # Palabras clave que indican contexto académico/universitario válido
+    contexto_valido = [
+        # Universidad/ESPE
+        "espe", "universidad", "fuerzas armadas", "militar", "dcco", 
+        "departamento", "computación", "ciencias de la computación",
+        
+        # Académico
+        "carrera", "materia", "profesor", "docente", "estudiante", "alumno",
+        "clase", "curso", "syllabus", "programa", "semestre", "periodo",
+        "examen", "tarea", "proyecto", "tesis", "calificación", "nota",
+        "inscripción", "matricula", "registro", "graduación", "titulación",
+        
+        # Servicios universitarios
+        "biblioteca", "laboratorio", "aula", "salón", "edificio", "bloque",
+        "secretaria", "coordinador", "director", "decano", "rector",
+        "bienestar", "psicólogo", "médico", "enfermería", "comedor", "bar",
+        "parqueo", "transporte", "beca", "ayuda", "financiera",
+        
+        # Tecnología/Computación
+        "programación", "software", "hardware", "algoritmo", "base de datos",
+        "redes", "sistemas", "ingeniería", "desarrollo", "código", "aplicación",
+        "web", "móvil", "inteligencia artificial", "machine learning",
+        
+        # Procesos universitarios
+        "admisión", "requisitos", "documentos", "certificado", "horario",
+        "cronograma", "calendario", "actividades", "eventos", "conferencia"
+    ]
+    
+    # Temas claramente fuera de contexto
+    temas_prohibidos = [
+        # Política
+        "presidente", "gobierno", "político", "elecciones", "democracia",
+        "congreso", "asamblea", "ministro", "alcalde", "prefecto",
+        
+        # Geografía general
+        "país", "países", "capital", "ciudad", "continente", "océano",
+        "río", "montaña", "clima", "temperatura", "población",
+        
+        # Historia general
+        "guerra", "batalla", "imperio", "conquista", "independencia",
+        "revolución", "histórico", "siglo", "época", "era",
+        
+        # Entretenimiento
+        "película", "actor", "cantante", "música", "deporte", "fútbol",
+        "televisión", "series", "videojuego", "celebridad",
+        
+        # Ciencias generales (no computación)
+        "medicina", "biología", "química", "física", "astronomía",
+        "matemáticas", "psicología", "filosofía", "sociología",
+        
+        # Tiempo/Fecha
+        "hora", "tiempo", "fecha", "día", "mes", "año", "calendario",
+        
+        # Otros temas generales
+        "receta", "cocina", "comida", "restaurante", "viaje", "turismo",
+        "dinero", "precio", "costo", "comprar", "vender", "negocio"
+    ]
+    
+    # Verificar si contiene palabras de contexto válido
+    tiene_contexto_valido = any(palabra in pregunta_lower for palabra in contexto_valido)
+    
+    # Verificar si contiene temas prohibidos
+    tiene_tema_prohibido = any(palabra in pregunta_lower for palabra in temas_prohibidos)
+    
+    # La pregunta está fuera de contexto si:
+    # 1. No tiene palabras de contexto válido Y tiene temas prohibidos
+    # 2. O si tiene claramente temas prohibidos sin contexto universitario
+    if tiene_tema_prohibido and not tiene_contexto_valido:
+        return True
+    
+    return False
+
+def validar_relevancia_respuesta(pregunta, respuesta, documentos):
+    """
+    Valida si la respuesta generada es relevante al contexto del DCCO/ESPE
+    """
+    # Si no hay documentos relevantes, la respuesta probablemente no es válida
+    if not documentos:
+        return False
+    
+    # Calcular relevancia promedio de los documentos encontrados
+    relevancia_promedio = 0
+    documentos_validos = 0
+    
+    for doc in documentos:
+        if doc.metadata.get("source") in ["faq", "web"]:
+            score = similitud_texto(pregunta, doc.page_content[:200])
+            relevancia_promedio += score
+            documentos_validos += 1
+    
+    if documentos_validos > 0:
+        relevancia_promedio /= documentos_validos
+    
+    # Si la relevancia promedio es muy baja, la respuesta no es confiable
+    if relevancia_promedio < 0.15:
+        return False
+    
+    # Verificar si la respuesta contiene información específica del DCCO/ESPE
+    respuesta_lower = respuesta.lower()
+    indicadores_especificos = [
+        "espe", "dcco", "departamento", "computación", "universidad",
+        "estudiante", "curso", "materia", "profesor", "carrera"
+    ]
+    
+    tiene_indicadores = any(indicador in respuesta_lower for indicador in indicadores_especificos)
+    
+    return tiene_indicadores
+
+def generar_respuesta_fuera_contexto():
+    """
+    Genera una respuesta estándar para preguntas fuera del contexto
+    """
+    respuestas = [
+        "Lo siento, pero solo puedo ayudarte con preguntas relacionadas al Departamento de Ciencias de la Computación (DCCO) de la ESPE. ¿Hay algo específico sobre la universidad, carreras, materias o servicios estudiantiles en lo que pueda ayudarte?",
+        
+        "Mi función es asistir con consultas relacionadas al DCCO y la ESPE. No puedo responder preguntas fuera de este contexto académico. ¿Tienes alguna pregunta sobre la universidad, el departamento o los servicios estudiantiles?",
+        
+        "Estoy diseñado para ayudarte específicamente con información del Departamento de Ciencias de la Computación de la ESPE. ¿Podrías hacer una pregunta relacionada con la universidad, las carreras o los servicios académicos?",
+        
+        "Solo puedo proporcionar información relacionada con el DCCO y la Universidad de las Fuerzas Armadas ESPE. ¿Hay algo sobre la institución, las carreras de computación o los servicios estudiantiles que te gustaría saber?"
+    ]
+    
+    import random
+    return random.choice(respuestas)
+
 def consultar_openai(prompt):
     """
     Llama a OpenAI (GPT-3.5) con un prompt.
@@ -81,7 +212,15 @@ class ChatbotAPIView(APIView):
         if not pregunta:
             return Response({"error": "Falta el campo 'pregunta'"}, status=400)
 
-        # 1. Intenciones básicas
+        # 1. Verificar si la pregunta está fuera del contexto del DCCO/ESPE
+        if es_pregunta_fuera_contexto(pregunta):
+            return Response({
+                "respuesta": generar_respuesta_fuera_contexto(),
+                "fuente": "sistema",
+                "metodo": "fuera_de_contexto"
+            }, status=200)
+
+        # 2. Intenciones básicas
         intencion = self.detectar_intencion(pregunta)
         if intencion:
             return Response({
@@ -92,7 +231,7 @@ class ChatbotAPIView(APIView):
         try:
             documentos = buscar_documentos(pregunta, top_k=5)
 
-            # 2. Buscar coincidencia exacta en FAQs
+            # 3. Buscar coincidencia exacta en FAQs
             for doc in documentos:
                 if doc.metadata.get("source") == "faq":
                     score = similitud_texto(pregunta, doc.metadata.get("pregunta_original", ""))
@@ -117,7 +256,7 @@ Respuesta:"""
                             "similitud": round(score, 3)
                         }, status=200)
 
-            # 3. Buscar mejor contenido en web/pdf
+            # 4. Buscar mejor contenido en web/pdf
             mejor_doc = None
             mejor_score = 0
             for doc in documentos:
@@ -147,11 +286,22 @@ Respuesta:"""
                     "similitud": round(mejor_score, 3)
                 }, status=200)
 
-            # 4. Último recurso: pasar todo el contexto al LLM
-            contexto_general = "\n\n".join([doc.page_content[:400] for doc in documentos])
-            prompt = f"""Responde la siguiente pregunta del usuario usando la información disponible.
+            # 5. Validar relevancia antes del fallback
+            if not validar_relevancia_respuesta(pregunta, "", documentos):
+                return Response({
+                    "respuesta": generar_respuesta_fuera_contexto(),
+                    "fuente": "sistema",
+                    "metodo": "sin_contexto_relevante"
+                }, status=200)
 
-Contexto:
+            # 6. Último recurso: pasar todo el contexto al LLM con restricción
+            contexto_general = "\n\n".join([doc.page_content[:400] for doc in documentos])
+            prompt = f"""Eres un asistente del Departamento de Ciencias de la Computación (DCCO) de la ESPE. 
+SOLO puedes responder preguntas relacionadas con la universidad, el departamento, carreras, materias, servicios estudiantiles, o información académica.
+
+Si la pregunta no está relacionada con estos temas, responde que solo puedes ayudar con información del DCCO y la ESPE.
+
+Contexto disponible:
 {contexto_general}
 
 Pregunta:
@@ -159,10 +309,19 @@ Pregunta:
 
 Respuesta:"""
             respuesta_fallback = consultar_openai(prompt)
+            
+            # Validar que la respuesta generada sea relevante
+            if not validar_relevancia_respuesta(pregunta, respuesta_fallback, documentos):
+                return Response({
+                    "respuesta": generar_respuesta_fuera_contexto(),
+                    "fuente": "sistema",
+                    "metodo": "respuesta_no_relevante"
+                }, status=200)
+            
             return Response({
                 "respuesta": respuesta_fallback,
                 "fuente": "LLM",
-                "metodo": "llm_sin_respuesta_base"
+                "metodo": "llm_con_restriccion_contexto"
             }, status=200)
 
         except Exception as e:
@@ -502,3 +661,40 @@ class FAQDuplicateCheckAPIView(APIView):
             'similitud': resultado['similitud'],
             'recomendacion': 'No agregar' if resultado['es_duplicado'] else 'Puede agregar'
         }, status=status.HTTP_200_OK)
+
+class ChatbotTestContextAPIView(APIView):
+    """
+    Endpoint para probar el filtrado de contexto
+    """
+    authentication_classes = [PublicAuthentication]
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        pregunta = request.data.get("pregunta")
+        if not pregunta:
+            return Response({"error": "Falta el campo 'pregunta'"}, status=400)
+        
+        # Analizar la pregunta
+        es_fuera_contexto = es_pregunta_fuera_contexto(pregunta)
+        
+        # Obtener documentos relevantes
+        documentos = buscar_documentos(pregunta, top_k=3)
+        
+        # Calcular relevancia promedio
+        relevancia_promedio = 0
+        if documentos:
+            for doc in documentos:
+                score = similitud_texto(pregunta, doc.page_content[:200])
+                relevancia_promedio += score
+            relevancia_promedio /= len(documentos)
+        
+        return Response({
+            "pregunta": pregunta,
+            "es_fuera_contexto": es_fuera_contexto,
+            "documentos_encontrados": len(documentos),
+            "relevancia_promedio": round(relevancia_promedio, 3),
+            "analisis": {
+                "decision": "rechazar" if es_fuera_contexto else "procesar",
+                "razon": "Pregunta fuera del contexto DCCO/ESPE" if es_fuera_contexto else "Pregunta válida para el contexto"
+            }
+        }, status=200)
