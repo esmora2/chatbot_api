@@ -2,6 +2,7 @@ from huggingface_hub import login
 from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
+from django.conf import settings
 from .document_loader import cargar_documentos
 
 # Global variables that will be initialized lazily
@@ -19,7 +20,9 @@ def inicializar_vector_store():
     
     if all_documents is None:
         try:
-            login("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")
+            # Use token from environment variable if available
+            if settings.HUGGINGFACE_TOKEN:
+                login(settings.HUGGINGFACE_TOKEN)
             all_documents = cargar_documentos()
             embedding_model = SentenceTransformer("multi-qa-MiniLM-L6-cos-v1")
             
@@ -49,6 +52,6 @@ def buscar_documentos(query, top_k=3):
         return []
     
     query_embedding = embedding_model.encode([query]).astype("float32")
-    distances, indices = index.search(query_embedding, top_k)
+    _, indices = index.search(query_embedding, top_k)
     resultados = [all_documents[i] for i in indices[0]]
     return resultados

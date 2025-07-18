@@ -11,6 +11,11 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 from pathlib import Path
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -172,3 +177,6 @@ REST_FRAMEWORK = {
 
 # Custom token for FAQ management
 FAQ_MANAGEMENT_TOKEN = 'your-secure-token-here-change-in-production'
+
+# Hugging Face Configuration
+HUGGINGFACE_TOKEN = os.getenv('HUGGINGFACE_TOKEN', '')
