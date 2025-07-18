@@ -180,3 +180,6 @@ FAQ_MANAGEMENT_TOKEN = 'your-secure-token-here-change-in-production'
 
 # Hugging Face Configuration
 HUGGINGFACE_TOKEN = os.getenv('HUGGINGFACE_TOKEN', '')
+
+# OpenAI Configuration
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')

@@ -21,7 +21,10 @@ logger = logging.getLogger(__name__)
 
 # API mejorada que maneja correctamente las respuestas del CSV
 # Función para calcular similitud entre textos
-OPENAI_API_KEY = "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"  # Pega aquí tu clave real
+from django.conf import settings
+
+# Obtener API key desde settings/environment
+OPENAI_API_KEY = getattr(settings, 'OPENAI_API_KEY', '')
 
 # --------- FUNCIONES AUXILIARES ---------
 
@@ -173,25 +176,38 @@ def generar_respuesta_fuera_contexto():
 def consultar_openai(prompt):
     """
     Llama a OpenAI (GPT-3.5) con un prompt.
+    Fallback: si falla, devuelve None para usar respuesta directa.
     """
-    endpoint = "https://api.openai.com/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "model": "gpt-3.5-turbo",
-        "messages": [
-            {"role": "system", "content": "Eres un asistente académico del Departamento de Ciencias de la Computación de la ESPE. Responde siempre en español."},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.6
-    }
-    response = requests.post(endpoint, headers=headers, json=data)
-    if response.status_code == 200:
-        return response.json()["choices"][0]["message"]["content"].strip()
-    else:
-        return f"[Error {response.status_code}] {response.text}"
+    try:
+        # Usar API key desde settings si está disponible
+        api_key = getattr(settings, 'OPENAI_API_KEY', None) or OPENAI_API_KEY
+        
+        if not api_key or api_key == 'your-openai-api-key-here':
+            logger.warning("OpenAI API key no configurada correctamente")
+            return None
+            
+        endpoint = "https://api.openai.com/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [
+                {"role": "system", "content": "Eres un asistente académico del Departamento de Ciencias de la Computación de la ESPE. Responde siempre en español."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.6
+        }
+        response = requests.post(endpoint, headers=headers, json=data)
+        if response.status_code == 200:
+            return response.json()["choices"][0]["message"]["content"].strip()
+        else:
+            logger.error(f"Error OpenAI API: {response.status_code} - {response.text}")
+            return None
+    except Exception as e:
+        logger.error(f"Error consultando OpenAI: {e}")
+        return None
 
 # --------- CLASE PRINCIPAL DE LA API ---------
 
@@ -242,10 +258,15 @@ class ChatbotAPIView(APIView):
         try:
             documentos = buscar_documentos(pregunta, top_k=5)
 
-            # 3. Buscar coincidencia exacta en FAQs
+            # 3. Buscar coincidencia exacta en FAQs (umbral más permisivo)
+            mejor_faq_doc = None
+            mejor_faq_score = 0
+            
             for doc in documentos:
                 if doc.metadata.get("source") == "faq":
                     score = similitud_texto(pregunta, doc.metadata.get("pregunta_original", ""))
+                    
+                    # Si el score es muy alto (>= 0.75), responder inmediatamente
                     if score >= 0.75:
                         respuesta_base = doc.metadata["respuesta_original"]
                         prompt = f"""La siguiente es una posible respuesta basada en una FAQ de la ESPE:
@@ -259,13 +280,26 @@ Por favor, reformúlala si es necesario para que suene más natural y completa p
 
 Respuesta:"""
                         respuesta_mejorada = consultar_openai(prompt)
+                        
+                        # Si OpenAI falla, usar respuesta original
+                        if respuesta_mejorada is None:
+                            respuesta_mejorada = respuesta_base
+                            metodo = "faq_directa"
+                        else:
+                            metodo = "faq_reformulada"
+                            
                         return Response({
                             "respuesta": respuesta_mejorada,
                             "pregunta_relacionada": doc.metadata["pregunta_original"],
                             "fuente": "FAQ",
-                            "metodo": "faq_reformulada",
+                            "metodo": metodo,
                             "similitud": round(score, 3)
                         }, status=200)
+                    
+                    # Guardar el mejor FAQ para usar después si no hay match exacto
+                    if score > mejor_faq_score:
+                        mejor_faq_doc = doc
+                        mejor_faq_score = score
 
             # 4. Buscar mejor contenido en web/pdf
             mejor_doc = None
@@ -289,12 +323,50 @@ Responde la siguiente pregunta de manera clara y académica:
 
 Respuesta:"""
                 respuesta_llm = consultar_openai(prompt)
+                
+                # Si OpenAI falla, usar contenido directamente
+                if respuesta_llm is None:
+                    respuesta_llm = f"Según la información disponible: {contexto[:400]}..."
+                    metodo = "web_contenido_directo"
+                else:
+                    metodo = "web_llm_refinado"
+                    
                 return Response({
                     "respuesta": respuesta_llm,
                     "fuente": mejor_doc.metadata.get("source", "web"),
                     "titulo": mejor_doc.metadata.get("titulo", ""),
-                    "metodo": "web_llm_refinado",
+                    "metodo": metodo,
                     "similitud": round(mejor_score, 3)
+                }, status=200)
+
+            # 4.5. Si no hay buen contenido web/pdf, usar el mejor FAQ si es suficientemente bueno
+            if mejor_faq_doc and mejor_faq_score >= 0.6:  # Umbral más bajo para FAQs
+                respuesta_base = mejor_faq_doc.metadata["respuesta_original"]
+                prompt = f"""La siguiente es una posible respuesta basada en una FAQ de la ESPE:
+
+Respuesta base:
+{respuesta_base}
+
+Por favor, reformúlala si es necesario para que suene más natural y completa para el usuario que preguntó:
+
+{pregunta}
+
+Respuesta:"""
+                respuesta_mejorada = consultar_openai(prompt)
+                
+                # Si OpenAI falla, usar respuesta original del FAQ
+                if respuesta_mejorada is None:
+                    respuesta_mejorada = respuesta_base
+                    metodo = "faq_directa"
+                else:
+                    metodo = "faq_mejor_match"
+                    
+                return Response({
+                    "respuesta": respuesta_mejorada,
+                    "pregunta_relacionada": mejor_faq_doc.metadata["pregunta_original"],
+                    "fuente": "FAQ",
+                    "metodo": metodo,
+                    "similitud": round(mejor_faq_score, 3)
                 }, status=200)
 
             # 5. Validar relevancia antes del fallback
@@ -321,8 +393,26 @@ Pregunta:
 Respuesta:"""
             respuesta_fallback = consultar_openai(prompt)
             
-            # Validar que la respuesta generada sea relevante
-            if not validar_relevancia_respuesta(pregunta, respuesta_fallback, documentos):
+            # Si OpenAI falla, usar respuesta genérica del primer documento
+            if respuesta_fallback is None:
+                if documentos:
+                    primer_doc = documentos[0]
+                    if primer_doc.metadata.get("source") == "faq":
+                        respuesta_fallback = primer_doc.metadata.get("respuesta_original", "")
+                    else:
+                        respuesta_fallback = primer_doc.page_content[:200] + "..."
+                    metodo = "contenido_directo"
+                else:
+                    return Response({
+                        "respuesta": generar_respuesta_fuera_contexto(),
+                        "fuente": "sistema",
+                        "metodo": "sin_contenido"
+                    }, status=200)
+            else:
+                metodo = "llm_con_restriccion_contexto"
+            
+            # Validar que la respuesta generada sea relevante (solo si viene de LLM)
+            if metodo == "llm_con_restriccion_contexto" and not validar_relevancia_respuesta(pregunta, respuesta_fallback, documentos):
                 return Response({
                     "respuesta": generar_respuesta_fuera_contexto(),
                     "fuente": "sistema",
@@ -331,8 +421,8 @@ Respuesta:"""
             
             return Response({
                 "respuesta": respuesta_fallback,
-                "fuente": "LLM",
-                "metodo": "llm_con_restriccion_contexto"
+                "fuente": "LLM" if metodo == "llm_con_restriccion_contexto" else "FAQ",
+                "metodo": metodo
             }, status=200)
 
         except Exception as e:

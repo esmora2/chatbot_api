@@ -49,26 +49,34 @@ def limpiar_contenido_web(texto):
 
 def cargar_documentos():
     all_docs = []
+    print(f"Iniciando carga de documentos desde {BASE_DIR}")
 
     # 1. Cargar CSV de FAQ
     faq_csv = os.path.join(BASE_DIR, "basecsvf.csv")
+    print(f"Buscando CSV en: {faq_csv}")
+    
     if os.path.exists(faq_csv):
+        print(f"CSV encontrado, intentando cargar...")
         try:
             # Intentar leer el CSV con diferentes configuraciones para manejar problemas de formato
             df = pd.read_csv(faq_csv, quotechar='"', skipinitialspace=True, on_bad_lines='skip')
+            print(f"CSV cargado exitosamente. Filas: {len(df)}")
         except pd.errors.ParserError as e:
             print(f"Error al parsear CSV: {e}")
             # Intentar con configuración más flexible
             try:
                 df = pd.read_csv(faq_csv, sep=',', quotechar='"', escapechar='\\', on_bad_lines='skip')
+                print(f"CSV cargado con configuración de backup. Filas: {len(df)}")
             except Exception as backup_error:
                 print(f"Error de backup al parsear CSV: {backup_error}")
                 # Si todo falla, crear un DataFrame vacío para continuar
                 df = pd.DataFrame(columns=['Pregunta', 'Respuesta'])
         
+        print(f"Columnas del CSV: {df.columns.tolist()}")
         df = df.dropna(subset=["Pregunta", "Respuesta"])
+        print(f"Filas válidas después de limpiar: {len(df)}")
 
-        for _, row in df.iterrows():
+        for i, row in df.iterrows():
             contenido = f"Pregunta: {row['Pregunta']}\nRespuesta: {row['Respuesta']}"
             doc = Document(
                 page_content=contenido,
@@ -80,6 +88,10 @@ def cargar_documentos():
                 }
             )
             all_docs.append(doc)
+        
+        print(f"Documentos FAQ agregados: {len([d for d in all_docs if d.metadata.get('source') == 'faq'])}")
+    else:
+        print(f"CSV no encontrado en: {faq_csv}")
 
     # 2. Cargar contenido web DCCO (scraping limpio)
     web_csv = os.path.join(BASE_DIR, "contenido_web_dcco.csv")
