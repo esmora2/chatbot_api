@@ -315,10 +315,39 @@ class ChatbotAPIView(APIView):
                 "fuente": "sistema",
                 "metodo": "intencion_basica"
             }, status=200)
+
         try:
+            # 3. Buscar primero en Firebase con búsqueda exacta
+            resultado_firebase = self.busqueda_firebase_inteligente(pregunta)
+            
+            if resultado_firebase:
+                # Reformular respuesta usando LLM para que suene más natural
+                respuesta_base = resultado_firebase["respuesta"]
+                prompt = f"""La siguiente es una respuesta basada en nuestra base de conocimientos de la ESPE:
+
+Respuesta base:
+{respuesta_base}
+
+Por favor, reformúlala si es necesario para que suene más natural y completa para el usuario que preguntó:
+
+{pregunta}
+
+Respuesta:"""
+                
+                respuesta_mejorada = consultar_llm_inteligente(prompt)
+                
+                return Response({
+                    "respuesta": respuesta_mejorada if respuesta_mejorada else respuesta_base,
+                    "pregunta_relacionada": resultado_firebase["pregunta_original"],
+                    "fuente": "FAQ (Firebase)",
+                    "metodo": "firebase_reformulada" if respuesta_mejorada else "firebase_directa",
+                    "score": resultado_firebase["score"]
+                }, status=200)
+
+            # 4. Si no hay resultados en Firebase, usar búsqueda semántica tradicional
             documentos = buscar_documentos(pregunta, top_k=5)
 
-            # 3. Buscar coincidencia exacta en FAQs (umbral más permisivo)
+            # 5. Buscar coincidencia exacta en FAQs del vector store (fallback)
             mejor_faq_doc = None
             mejor_faq_score = 0
             
@@ -351,7 +380,7 @@ Respuesta:"""
                         return Response({
                             "respuesta": respuesta_mejorada,
                             "pregunta_relacionada": doc.metadata["pregunta_original"],
-                            "fuente": "FAQ",
+                            "fuente": "FAQ (CSV Backup)",
                             "metodo": metodo,
                             "similitud": round(score, 3)
                         }, status=200)
@@ -361,7 +390,7 @@ Respuesta:"""
                         mejor_faq_doc = doc
                         mejor_faq_score = score
 
-            # 4. Buscar mejor contenido en web/pdf
+            # 6. Buscar mejor contenido en web/pdf
             mejor_doc = None
             mejor_score = 0
             for doc in documentos:
@@ -387,19 +416,19 @@ Respuesta:"""
                 # Si OpenAI falla, usar contenido directamente
                 if respuesta_llm is None:
                     respuesta_llm = f"Según la información disponible: {contexto[:400]}..."
-                    metodo = "web_contenido_directo"
+                    metodo = "contenido_procesado"
                 else:
-                    metodo = "web_llm_refinado"
+                    metodo = "pdf_llm_refinado"
                     
                 return Response({
                     "respuesta": respuesta_llm,
-                    "fuente": mejor_doc.metadata.get("source", "web"),
+                    "fuente": mejor_doc.metadata.get("source", "PDF"),
                     "titulo": mejor_doc.metadata.get("titulo", ""),
                     "metodo": metodo,
                     "similitud": round(mejor_score, 3)
                 }, status=200)
 
-            # 4.5. Si no hay buen contenido web/pdf, usar el mejor FAQ si es suficientemente bueno
+            # 7. Si no hay buen contenido web/pdf, usar el mejor FAQ si es suficientemente bueno
             if mejor_faq_doc and mejor_faq_score >= 0.6:  # Umbral más bajo para FAQs
                 respuesta_base = mejor_faq_doc.metadata["respuesta_original"]
                 prompt = f"""La siguiente es una posible respuesta basada en una FAQ de la ESPE:
@@ -417,19 +446,19 @@ Respuesta:"""
                 # Si OpenAI falla, usar respuesta original del FAQ
                 if respuesta_mejorada is None:
                     respuesta_mejorada = respuesta_base
-                    metodo = "faq_directa"
+                    metodo = "faq_backup_directa"
                 else:
                     metodo = "faq_mejor_match"
                     
                 return Response({
                     "respuesta": respuesta_mejorada,
                     "pregunta_relacionada": mejor_faq_doc.metadata["pregunta_original"],
-                    "fuente": "FAQ",
+                    "fuente": "FAQ (CSV Backup)",
                     "metodo": metodo,
                     "similitud": round(mejor_faq_score, 3)
                 }, status=200)
 
-            # 5. Validar relevancia antes del fallback
+            # 8. Validar relevancia antes del fallback
             if not validar_relevancia_respuesta(pregunta, "", documentos):
                 return Response({
                     "respuesta": generar_respuesta_fuera_contexto(),
@@ -437,7 +466,7 @@ Respuesta:"""
                     "metodo": "sin_contexto_relevante"
                 }, status=200)
 
-            # 6. Último recurso: pasar todo el contexto al LLM con restricción
+            # 9. Último recurso: pasar todo el contexto al LLM con restricción
             contexto_general = "\n\n".join([doc.page_content[:400] for doc in documentos])
             prompt = f"""Eres un asistente del Departamento de Ciencias de la Computación (DCCO) de la ESPE. 
 SOLO puedes responder preguntas relacionadas con la universidad, el departamento, carreras, materias, servicios estudiantiles, o información académica.
@@ -481,7 +510,7 @@ Respuesta:"""
             
             return Response({
                 "respuesta": respuesta_fallback,
-                "fuente": "LLM" if metodo == "llm_con_restriccion_contexto" else "FAQ",
+                "fuente": "LLM" if metodo == "llm_con_restriccion_contexto" else "Sistema",
                 "metodo": metodo
             }, status=200)
 
@@ -491,14 +520,128 @@ Respuesta:"""
                 "detalle": str(e)
             }, status=500)
 
+    def busqueda_firebase_inteligente(self, pregunta):
+        """
+        Busca en Firebase con algoritmo inteligente de matching
+        """
+        try:
+            from .firebase_service import FirebaseService
+            firebase_service = FirebaseService()
+            
+            pregunta_lower = pregunta.lower()
+            
+            # Palabras clave importantes para dar mayor peso
+            palabras_clave = ["psicólogo", "psicóloga", "bienestar", "bar", "comedor", 
+                             "departamento", "computación", "biblioteca", "parqueo", 
+                             "secretaria", "coordinador", "carrera", "materia", "profesor"]
+            
+            # Obtener todas las FAQs de Firebase
+            faqs = firebase_service.get_all_faqs()
+            
+            mejor_resultado = None
+            mejor_score = 0
+            
+            for faq in faqs:
+                pregunta_faq = faq.get("pregunta", "").lower()
+                
+                # Calcular similitud exacta
+                similitud_exacta = similitud_texto(pregunta_lower, pregunta_faq)
+                
+                # Calcular coincidencias de palabras
+                palabras_pregunta = set(pregunta_lower.split())
+                palabras_faq = set(pregunta_faq.split())
+                
+                # Buscar coincidencias en palabras importantes
+                coincidencias_importantes = 0
+                for palabra in palabras_clave:
+                    if palabra in pregunta_lower and palabra in pregunta_faq:
+                        coincidencias_importantes += 3  # Mayor peso
+                
+                # Buscar coincidencias generales
+                coincidencias_generales = len(palabras_pregunta.intersection(palabras_faq))
+                
+                # Score total combinado
+                score_total = (similitud_exacta * 10) + coincidencias_importantes + coincidencias_generales
+                
+                # Si hay buena coincidencia y es mejor que la anterior
+                if score_total >= 5 and score_total > mejor_score:
+                    mejor_score = score_total
+                    mejor_resultado = {
+                        "respuesta": faq.get("respuesta", ""),
+                        "pregunta_original": faq.get("pregunta", ""),
+                        "score": round(score_total, 2),
+                        "similitud_exacta": round(similitud_exacta, 3)
+                    }
+            
+            return mejor_resultado
+            
+        except Exception as e:
+            print(f"Error en búsqueda Firebase: {e}")
+            return None
+
 # Versión alternativa con búsqueda híbrida
 class ChatbotHibridoAPIView(APIView):
     """
     Búsqueda híbrida: exacta + semántica
     """
-    def busqueda_exacta_csv(self, pregunta):
+    def busqueda_exacta_firebase(self, pregunta):
         """
-        Busca coincidencias exactas de palabras clave en el CSV
+        Busca coincidencias exactas de palabras clave en Firebase Firestore
+        """
+        try:
+            from .firebase_service import FirebaseService
+            firebase_service = FirebaseService()
+            
+            pregunta_lower = pregunta.lower()
+            
+            # Buscar palabras clave importantes
+            palabras_clave = ["psicólogo", "psicóloga", "bienestar", "bar", "comedor", 
+                             "departamento", "computación", "biblioteca", "parqueo", 
+                             "secretaria", "coordinador"]
+            
+            # Obtener todas las FAQs de Firebase
+            faqs = firebase_service.get_all_faqs()
+            
+            mejor_resultado = None
+            mejor_score = 0
+            
+            for faq in faqs:
+                pregunta_faq = faq.get("pregunta", "").lower()
+                
+                # Calcular similitud por palabras clave
+                palabras_pregunta = set(pregunta_lower.split())
+                palabras_faq = set(pregunta_faq.split())
+                
+                # Buscar coincidencias en palabras importantes
+                coincidencias_importantes = 0
+                for palabra in palabras_clave:
+                    if palabra in pregunta_lower and palabra in pregunta_faq:
+                        coincidencias_importantes += 2
+                
+                # Buscar coincidencias generales
+                coincidencias_generales = len(palabras_pregunta.intersection(palabras_faq))
+                
+                score_total = coincidencias_importantes + coincidencias_generales
+                
+                # Si hay buena coincidencia y es mejor que la anterior
+                if score_total >= 2 and score_total > mejor_score:
+                    mejor_score = score_total
+                    mejor_resultado = {
+                        "respuesta": faq.get("respuesta", ""),
+                        "pregunta_original": faq.get("pregunta", ""),
+                        "score": score_total
+                    }
+            
+            return mejor_resultado
+            
+        except Exception as e:
+            print(f"Error en búsqueda Firebase: {e}")
+            # Fallback al CSV si Firebase falla
+            return self.busqueda_exacta_csv_fallback(pregunta)
+    
+    def busqueda_exacta_csv_fallback(self, pregunta):
+        """
+        Fallback: Busca coincidencias exactas de palabras clave en el CSV
         """
         import pandas as pd
         import os
@@ -551,14 +694,14 @@ class ChatbotHibridoAPIView(APIView):
             return Response({"error": "Falta el campo 'pregunta'"}, status=400)
 
         try:
-            # 1. Intentar búsqueda exacta primero
-            resultado_exacto = self.busqueda_exacta_csv(pregunta)
+            # 1. Intentar búsqueda exacta primero con Firebase
+            resultado_exacto = self.busqueda_exacta_firebase(pregunta)
             
             if resultado_exacto:
                 return Response({
                     "respuesta": resultado_exacto["respuesta"],
                     "pregunta_relacionada": resultado_exacto["pregunta_original"],
-                    "fuente": "FAQ",
+                    "fuente": "FAQ (Firebase)",
                     "metodo": "busqueda_exacta",
                     "score": resultado_exacto["score"]
                 }, status=200)

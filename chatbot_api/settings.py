@@ -188,3 +188,7 @@ OLLAMA_HOST = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
 OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama3.2:1b')
 USE_OLLAMA_FALLBACK = os.getenv('USE_OLLAMA_FALLBACK', 'True').lower() == 'true'
 
+# Firebase Configuration
+FIREBASE_PROJECT_ID = os.getenv('FIREBASE_PROJECT_ID', 'chatbot-dcco')
+GOOGLE_APPLICATION_CREDENTIALS = os.getenv('GOOGLE_APPLICATION_CREDENTIALS', '')
+

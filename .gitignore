@@ -189,4 +189,8 @@ cython_debug/
 .history
 .ionide
 
+# Firebase Credentials (SECURITY)
+credentials/
+*.json
+
 # End of https://www.toptal.com/developers/gitignore/api/django,visualstudiocode

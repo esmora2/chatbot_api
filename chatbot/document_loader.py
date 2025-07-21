@@ -7,6 +7,7 @@ from langchain.schema import Document
 import csv
 from django.utils import timezone
 import logging
+from .firebase_service import firebase_service
 
 logger = logging.getLogger(__name__)
 
@@ -47,51 +48,86 @@ def limpiar_contenido_web(texto):
     return "\n".join(lineas_limpias).strip()
 
 
-def cargar_documentos():
-    all_docs = []
-    print(f"Iniciando carga de documentos desde {BASE_DIR}")
-
-    # 1. Cargar CSV de FAQ
-    faq_csv = os.path.join(BASE_DIR, "basecsvf.csv")
-    print(f"Buscando CSV en: {faq_csv}")
+def cargar_faqs_desde_firebase():
+    """
+    Carga FAQs desde Firebase Firestore en lugar del CSV
+    """
+    print("Cargando FAQs desde Firebase Firestore...")
     
-    if os.path.exists(faq_csv):
-        print(f"CSV encontrado, intentando cargar...")
-        try:
-            # Intentar leer el CSV con diferentes configuraciones para manejar problemas de formato
-            df = pd.read_csv(faq_csv, quotechar='"', skipinitialspace=True, on_bad_lines='skip')
-            print(f"CSV cargado exitosamente. Filas: {len(df)}")
-        except pd.errors.ParserError as e:
-            print(f"Error al parsear CSV: {e}")
-            # Intentar con configuración más flexible
-            try:
-                df = pd.read_csv(faq_csv, sep=',', quotechar='"', escapechar='\\', on_bad_lines='skip')
-                print(f"CSV cargado con configuración de backup. Filas: {len(df)}")
-            except Exception as backup_error:
-                print(f"Error de backup al parsear CSV: {backup_error}")
-                # Si todo falla, crear un DataFrame vacío para continuar
-                df = pd.DataFrame(columns=['Pregunta', 'Respuesta'])
+    if not firebase_service.is_connected():
+        print("Firebase no está conectado, cargando desde CSV como fallback")
+        return cargar_faqs_desde_csv()
+    
+    try:
+        faqs = firebase_service.get_all_faqs()
+        docs = []
         
-        print(f"Columnas del CSV: {df.columns.tolist()}")
-        df = df.dropna(subset=["Pregunta", "Respuesta"])
-        print(f"Filas válidas después de limpiar: {len(df)}")
-
-        for i, row in df.iterrows():
-            contenido = f"Pregunta: {row['Pregunta']}\nRespuesta: {row['Respuesta']}"
+        for faq in faqs:
+            contenido = f"Pregunta: {faq['pregunta']}\nRespuesta: {faq['respuesta']}"
             doc = Document(
                 page_content=contenido,
                 metadata={
                     "source": "faq",
-                    "tipo": "faq",
-                    "pregunta_original": row["Pregunta"],
-                    "respuesta_original": row["Respuesta"]
+                    "tipo": "faq_firebase",
+                    "pregunta_original": faq["pregunta"],
+                    "respuesta_original": faq["respuesta"],
+                    "categoria": faq.get("categoria", ""),
+                    "firebase_id": faq.get("document_id", ""),
+                    "fecha_creacion": faq.get("fecha_creacion"),
+                    "activo": faq.get("activo", True)
                 }
             )
-            all_docs.append(doc)
+            docs.append(doc)
         
-        print(f"Documentos FAQ agregados: {len([d for d in all_docs if d.metadata.get('source') == 'faq'])}")
-    else:
-        print(f"CSV no encontrado en: {faq_csv}")
+        print(f"FAQs cargadas desde Firebase: {len(docs)}")
+        return docs
+        
+    except Exception as e:
+        print(f"Error cargando desde Firebase: {e}")
+        print("Fallback: cargando desde CSV")
+        return cargar_faqs_desde_csv()
+
+def cargar_faqs_desde_csv():
+    """
+    Función fallback para cargar FAQs desde CSV
+    """
+    print("Cargando FAQs desde CSV local...")
+    docs = []
+    
+    faq_csv = os.path.join(BASE_DIR, "basecsvf.csv")
+    
+    if os.path.exists(faq_csv):
+        try:
+            df = pd.read_csv(faq_csv, quotechar='"', skipinitialspace=True, on_bad_lines='skip')
+            df = df.dropna(subset=["Pregunta", "Respuesta"])
+            
+            for i, row in df.iterrows():
+                contenido = f"Pregunta: {row['Pregunta']}\nRespuesta: {row['Respuesta']}"
+                doc = Document(
+                    page_content=contenido,
+                    metadata={
+                        "source": "faq",
+                        "tipo": "faq_csv",
+                        "pregunta_original": row["Pregunta"],
+                        "respuesta_original": row["Respuesta"]
+                    }
+                )
+                docs.append(doc)
+            
+            print(f"FAQs cargadas desde CSV: {len(docs)}")
+            
+        except Exception as e:
+            print(f"Error cargando CSV: {e}")
+    
+    return docs
+
+def cargar_documentos():
+    all_docs = []
+    print(f"Iniciando carga de documentos desde {BASE_DIR}")
+
+    # 1. Cargar FAQ (Firebase primero, CSV como fallback)
+    faq_docs = cargar_faqs_desde_firebase()
+    all_docs.extend(faq_docs)
 
     # 2. Cargar contenido web DCCO (scraping limpio)
     web_csv = os.path.join(BASE_DIR, "contenido_web_dcco.csv")
