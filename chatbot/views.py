@@ -9,6 +9,7 @@ from rest_framework.permissions import AllowAny
 from difflib import SequenceMatcher
 import re
 import requests
+import ollama
 
 from .vector_store import buscar_documentos
 from .serializers import FAQEntrySerializer, ChatbotQuerySerializer
@@ -209,6 +210,65 @@ def consultar_openai(prompt):
         logger.error(f"Error consultando OpenAI: {e}")
         return None
 
+def consultar_ollama(prompt):
+    """
+    Llama a Ollama con un prompt usando el modelo local.
+    Fallback: si falla, devuelve None para usar respuesta directa.
+    """
+    try:
+        # Obtener configuración de Ollama desde settings
+        ollama_host = getattr(settings, 'OLLAMA_HOST', 'http://localhost:11434')
+        ollama_model = getattr(settings, 'OLLAMA_MODEL', 'llama3.2:1b')
+        
+        # Configurar cliente de Ollama
+        client = ollama.Client(host=ollama_host)
+        
+        # Hacer la consulta
+        response = client.chat(model=ollama_model, messages=[
+            {
+                'role': 'system',
+                'content': 'Eres un asistente académico del Departamento de Ciencias de la Computación de la ESPE. Responde siempre en español de manera clara y concisa.'
+            },
+            {
+                'role': 'user',
+                'content': prompt
+            }
+        ])
+        
+        if response and 'message' in response and 'content' in response['message']:
+            return response['message']['content'].strip()
+        else:
+            logger.error("Respuesta de Ollama con formato inesperado")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error consultando Ollama: {e}")
+        return None
+
+def consultar_llm_inteligente(prompt):
+    """
+    Función inteligente que intenta primero OpenAI y luego Ollama como fallback.
+    Si ambos fallan, devuelve None para usar respuesta directa.
+    """
+    # Intentar primero con OpenAI
+    respuesta_openai = consultar_openai(prompt)
+    if respuesta_openai is not None:
+        logger.info("Respuesta generada con OpenAI")
+        return respuesta_openai
+    
+    # Si OpenAI falla, intentar con Ollama (si está habilitado)
+    use_ollama_fallback = getattr(settings, 'USE_OLLAMA_FALLBACK', True)
+    if use_ollama_fallback:
+        logger.info("OpenAI falló, intentando con Ollama...")
+        respuesta_ollama = consultar_ollama(prompt)
+        if respuesta_ollama is not None:
+            logger.info("Respuesta generada con Ollama")
+            return respuesta_ollama
+    
+    # Si ambos fallan, retornar None para usar respuesta directa
+    logger.warning("Tanto OpenAI como Ollama fallaron")
+    return None
+
 # --------- CLASE PRINCIPAL DE LA API ---------
 
 class ChatbotAPIView(APIView):
@@ -279,7 +339,7 @@ Por favor, reformúlala si es necesario para que suene más natural y completa p
 {pregunta}
 
 Respuesta:"""
-                        respuesta_mejorada = consultar_openai(prompt)
+                        respuesta_mejorada = consultar_llm_inteligente(prompt)
                         
                         # Si OpenAI falla, usar respuesta original
                         if respuesta_mejorada is None:
@@ -322,7 +382,7 @@ Responde la siguiente pregunta de manera clara y académica:
 {pregunta}
 
 Respuesta:"""
-                respuesta_llm = consultar_openai(prompt)
+                respuesta_llm = consultar_llm_inteligente(prompt)
                 
                 # Si OpenAI falla, usar contenido directamente
                 if respuesta_llm is None:
@@ -352,7 +412,7 @@ Por favor, reformúlala si es necesario para que suene más natural y completa p
 {pregunta}
 
 Respuesta:"""
-                respuesta_mejorada = consultar_openai(prompt)
+                respuesta_mejorada = consultar_llm_inteligente(prompt)
                 
                 # Si OpenAI falla, usar respuesta original del FAQ
                 if respuesta_mejorada is None:
@@ -391,7 +451,7 @@ Pregunta:
 {pregunta}
 
 Respuesta:"""
-            respuesta_fallback = consultar_openai(prompt)
+            respuesta_fallback = consultar_llm_inteligente(prompt)
             
             # Si OpenAI falla, usar respuesta genérica del primer documento
             if respuesta_fallback is None:
