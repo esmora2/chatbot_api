@@ -113,36 +113,50 @@ def es_pregunta_fuera_contexto(pregunta):
 
 def validar_relevancia_respuesta(pregunta, respuesta, documentos):
     """
-    Valida si la respuesta generada es relevante al contexto del DCCO/ESPE
+    Valida si la respuesta generada es relevante al contexto del DCCO/ESPE.
+    Configurado con umbrales estrictos para evitar respuestas fuera de contexto.
     """
-    # Si no hay documentos relevantes, la respuesta probablemente no es válida
+    # Si no hay documentos relevantes, definitivamente no es válida
     if not documentos:
         return False
-    
-    # Si hay documentos PDF, ser más permisivo
-    tiene_pdf = any(doc.metadata.get("source") == "pdf" for doc in documentos)
     
     # Calcular relevancia promedio de los documentos encontrados
     relevancia_promedio = 0
     documentos_validos = 0
     
     for doc in documentos:
-        # Incluir todos los tipos de documentos (FAQ, web, PDF)
+        # Solo considerar documentos relevantes
         if doc.metadata.get("source") in ["faq", "web", "pdf"]:
             score = similitud_texto(pregunta, doc.page_content[:200])
             relevancia_promedio += score
             documentos_validos += 1
     
-    if documentos_validos > 0:
-        relevancia_promedio /= documentos_validos
+    if documentos_validos == 0:
+        return False
+        
+    relevancia_promedio /= documentos_validos
     
-    # Ajustar umbral basado en el tipo de documentos
-    umbral = 0.01 if tiene_pdf else 0.05
-    if relevancia_promedio < umbral:
+    # UMBRAL ESTRICTO: Solo permitir preguntas con alta relevancia
+    umbral_estricto = 0.25  # Mucho más alto para evitar falsos positivos
+    
+    if relevancia_promedio < umbral_estricto:
         return False
     
-    # Si la respuesta está vacía (llamada previa), permitir continuar
+    # Si la respuesta está vacía (llamada previa), verificar palabras clave en la pregunta
     if not respuesta.strip():
+        pregunta_lower = pregunta.lower()
+        palabras_academicas = [
+            "espe", "dcco", "departamento", "computación", "universidad",
+            "estudiante", "curso", "materia", "profesor", "carrera", "campus",
+            "syllabus", "programa", "aplicaciones", "software", "psicólogo",
+            "bienestar", "coordinador", "secretaria", "biblioteca", "laboratorio"
+        ]
+        
+        # Debe contener al menos una palabra académica relevante
+        tiene_palabra_academica = any(palabra in pregunta_lower for palabra in palabras_academicas)
+        if not tiene_palabra_academica:
+            return False
+        
         return True
     
     # Verificar si la respuesta contiene información específica del DCCO/ESPE
@@ -159,20 +173,19 @@ def validar_relevancia_respuesta(pregunta, respuesta, documentos):
 
 def generar_respuesta_fuera_contexto():
     """
-    Genera una respuesta estándar para preguntas fuera del contexto
+    Genera una respuesta estándar para preguntas fuera del contexto.
+    Usa respuestas fijas para evitar alucinaciones.
     """
-    respuestas = [
+    respuestas_contexto_restringido = [
         "Lo siento, pero solo puedo ayudarte con preguntas relacionadas al Departamento de Ciencias de la Computación (DCCO) de la ESPE. ¿Hay algo específico sobre la universidad, carreras, materias o servicios estudiantiles en lo que pueda ayudarte?",
         
-        "Mi función es asistir con consultas relacionadas al DCCO y la ESPE. No puedo responder preguntas fuera de este contexto académico. ¿Tienes alguna pregunta sobre la universidad, el departamento o los servicios estudiantiles?",
+        "Mi función es asistir con consultas académicas relacionadas al DCCO y la ESPE. No puedo responder preguntas fuera de este contexto. ¿Tienes alguna pregunta sobre la universidad, profesores, materias o servicios del campus?",
         
-        "Estoy diseñado para ayudarte específicamente con información del Departamento de Ciencias de la Computación de la ESPE. ¿Podrías hacer una pregunta relacionada con la universidad, las carreras o los servicios académicos?",
-        
-        "Solo puedo proporcionar información relacionada con el DCCO y la Universidad de las Fuerzas Armadas ESPE. ¿Hay algo sobre la institución, las carreras de computación o los servicios estudiantiles que te gustaría saber?"
+        "Solo puedo proporcionar información relacionada con el Departamento de Ciencias de la Computación de la ESPE. ¿Te gustaría conocer algo sobre nuestras carreras, servicios estudiantiles o el campus universitario?"
     ]
     
     import random
-    return random.choice(respuestas)
+    return random.choice(respuestas_contexto_restringido)
 
 def consultar_openai(prompt):
     """
@@ -321,26 +334,15 @@ class ChatbotAPIView(APIView):
             resultado_firebase = self.busqueda_firebase_inteligente(pregunta)
             
             if resultado_firebase:
-                # Reformular respuesta usando LLM para que suene más natural
-                respuesta_base = resultado_firebase["respuesta"]
-                prompt = f"""La siguiente es una respuesta basada en nuestra base de conocimientos de la ESPE:
-
-Respuesta base:
-{respuesta_base}
-
-Por favor, reformúlala si es necesario para que suene más natural y completa para el usuario que preguntó:
-
-{pregunta}
-
-Respuesta:"""
-                
-                respuesta_mejorada = consultar_llm_inteligente(prompt)
+                # Usar respuesta directa sin reformulación (más confiable)
+                respuesta_final = resultado_firebase["respuesta"]
+                metodo_usado = "firebase_directa"
                 
                 return Response({
-                    "respuesta": respuesta_mejorada if respuesta_mejorada else respuesta_base,
+                    "respuesta": respuesta_final,
                     "pregunta_relacionada": resultado_firebase["pregunta_original"],
                     "fuente": "FAQ (Firebase)",
-                    "metodo": "firebase_reformulada" if respuesta_mejorada else "firebase_directa",
+                    "metodo": metodo_usado,
                     "score": resultado_firebase["score"]
                 }, status=200)
 
@@ -358,16 +360,20 @@ Respuesta:"""
                     # Si el score es muy alto (>= 0.75), responder inmediatamente
                     if score >= 0.75:
                         respuesta_base = doc.metadata["respuesta_original"]
-                        prompt = f"""La siguiente es una posible respuesta basada en una FAQ de la ESPE:
+                        prompt = f"""Eres un asistente de la ESPE. Reformula ÚNICAMENTE el estilo manteniendo EXACTAMENTE la misma información.
 
-Respuesta base:
+INSTRUCCIONES ESTRICTAS:
+- NO cambies la información factual
+- NO agregues información nueva
+- SOLO mejora la redacción si es necesario
+
+Respuesta original:
 {respuesta_base}
 
-Por favor, reformúlala si es necesario para que suene más natural y completa para el usuario que preguntó:
-
+Pregunta del usuario:
 {pregunta}
 
-Respuesta:"""
+Reformula SOLO el estilo manteniendo TODA la información:"""
                         respuesta_mejorada = consultar_llm_inteligente(prompt)
                         
                         # Si OpenAI falla, usar respuesta original
@@ -431,27 +437,13 @@ Respuesta:"""
             # 7. Si no hay buen contenido web/pdf, usar el mejor FAQ si es suficientemente bueno
             if mejor_faq_doc and mejor_faq_score >= 0.6:  # Umbral más bajo para FAQs
                 respuesta_base = mejor_faq_doc.metadata["respuesta_original"]
-                prompt = f"""La siguiente es una posible respuesta basada en una FAQ de la ESPE:
-
-Respuesta base:
-{respuesta_base}
-
-Por favor, reformúlala si es necesario para que suene más natural y completa para el usuario que preguntó:
-
-{pregunta}
-
-Respuesta:"""
-                respuesta_mejorada = consultar_llm_inteligente(prompt)
                 
-                # Si OpenAI falla, usar respuesta original del FAQ
-                if respuesta_mejorada is None:
-                    respuesta_mejorada = respuesta_base
-                    metodo = "faq_backup_directa"
-                else:
-                    metodo = "faq_mejor_match"
+                # Usar respuesta directa sin reformulación para evitar problemas
+                respuesta_final = respuesta_base
+                metodo = "faq_directa"
                     
                 return Response({
-                    "respuesta": respuesta_mejorada,
+                    "respuesta": respuesta_final,
                     "pregunta_relacionada": mejor_faq_doc.metadata["pregunta_original"],
                     "fuente": "FAQ (CSV Backup)",
                     "metodo": metodo,
@@ -522,18 +514,13 @@ Respuesta:"""
 
     def busqueda_firebase_inteligente(self, pregunta):
         """
-        Busca en Firebase con algoritmo inteligente de matching
+        Busca en Firebase con algoritmo inteligente y robusto de matching semántico
         """
         try:
             from .firebase_service import FirebaseService
             firebase_service = FirebaseService()
             
-            pregunta_lower = pregunta.lower()
-            
-            # Palabras clave importantes para dar mayor peso
-            palabras_clave = ["psicólogo", "psicóloga", "bienestar", "bar", "comedor", 
-                             "departamento", "computación", "biblioteca", "parqueo", 
-                             "secretaria", "coordinador", "carrera", "materia", "profesor"]
+            pregunta_lower = pregunta.lower().strip()
             
             # Obtener todas las FAQs de Firebase
             faqs = firebase_service.get_all_faqs()
@@ -542,38 +529,56 @@ Respuesta:"""
             mejor_score = 0
             
             for faq in faqs:
-                pregunta_faq = faq.get("pregunta", "").lower()
+                pregunta_faq = faq.get("pregunta", "").lower().strip()
+                respuesta_faq = faq.get("respuesta", "").lower().strip()
                 
-                # Calcular similitud exacta
-                similitud_exacta = similitud_texto(pregunta_lower, pregunta_faq)
+                # 1. Similitud exacta de texto (más peso)
+                similitud_pregunta = similitud_texto(pregunta_lower, pregunta_faq)
                 
-                # Calcular coincidencias de palabras
-                palabras_pregunta = set(pregunta_lower.split())
+                # 2. Buscar palabras clave comunes (normalizado)
+                palabras_usuario = set(pregunta_lower.split())
                 palabras_faq = set(pregunta_faq.split())
+                palabras_respuesta = set(respuesta_faq.split())
                 
-                # Buscar coincidencias en palabras importantes
-                coincidencias_importantes = 0
-                for palabra in palabras_clave:
-                    if palabra in pregunta_lower and palabra in pregunta_faq:
-                        coincidencias_importantes += 3  # Mayor peso
+                # Intersección de palabras entre pregunta del usuario y FAQ
+                interseccion_pregunta = palabras_usuario.intersection(palabras_faq)
+                interseccion_respuesta = palabras_usuario.intersection(palabras_respuesta)
                 
-                # Buscar coincidencias generales
-                coincidencias_generales = len(palabras_pregunta.intersection(palabras_faq))
+                # 3. Calcular score combinado y normalizado
+                # Similitud de texto (0-1) * 10 para darle más peso
+                score_similitud = similitud_pregunta * 10
                 
-                # Score total combinado
-                score_total = (similitud_exacta * 10) + coincidencias_importantes + coincidencias_generales
+                # Palabras comunes (más palabras = mejor match)
+                score_palabras = len(interseccion_pregunta) * 2 + len(interseccion_respuesta)
                 
-                # Si hay buena coincidencia y es mejor que la anterior
-                if score_total >= 5 and score_total > mejor_score:
+                # 4. Bonus por longitud similar (evita matches demasiado dispares)
+                diferencia_longitud = abs(len(palabras_usuario) - len(palabras_faq))
+                bonus_longitud = max(0, 3 - diferencia_longitud)
+                
+                # Score total
+                score_total = score_similitud + score_palabras + bonus_longitud
+                
+                # 5. Verificar si es mejor que el anterior
+                if score_total > mejor_score:
                     mejor_score = score_total
                     mejor_resultado = {
                         "respuesta": faq.get("respuesta", ""),
                         "pregunta_original": faq.get("pregunta", ""),
                         "score": round(score_total, 2),
-                        "similitud_exacta": round(similitud_exacta, 3)
+                        "similitud_exacta": round(similitud_pregunta, 3),
+                        "palabras_comunes": len(interseccion_pregunta),
+                        "debug_info": {
+                            "score_similitud": round(score_similitud, 2),
+                            "score_palabras": score_palabras,
+                            "bonus_longitud": bonus_longitud
+                        }
                     }
             
-            return mejor_resultado
+            # 6. Umbral dinámico basado en la calidad del match
+            if mejor_resultado and mejor_score >= 12.0:  # Umbral balanceado
+                return mejor_resultado
+            
+            return None
             
         except Exception as e:
             print(f"Error en búsqueda Firebase: {e}")

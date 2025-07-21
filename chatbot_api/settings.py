@@ -185,7 +185,7 @@ HUGGINGFACE_TOKEN = os.getenv('HUGGINGFACE_TOKEN', '')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
 
 OLLAMA_HOST = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
-OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama3.2:1b')
+OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama3:latest')
 USE_OLLAMA_FALLBACK = os.getenv('USE_OLLAMA_FALLBACK', 'True').lower() == 'true'
 
 # Firebase Configuration
