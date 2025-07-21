@@ -273,23 +273,30 @@ def consultar_llm_inteligente(prompt):
     Función inteligente que intenta primero OpenAI y luego Ollama como fallback.
     Si ambos fallan, devuelve None para usar respuesta directa.
     """
-    # Intentar primero con OpenAI
-    respuesta_openai = consultar_openai(prompt)
-    if respuesta_openai is not None:
-        logger.info("Respuesta generada con OpenAI")
-        return respuesta_openai
-    
-    # Si OpenAI falla, intentar con Ollama (si está habilitado)
-    use_ollama_fallback = getattr(settings, 'USE_OLLAMA_FALLBACK', True)
-    if use_ollama_fallback:
-        logger.info("OpenAI falló, intentando con Ollama...")
-        respuesta_ollama = consultar_ollama(prompt)
-        if respuesta_ollama is not None:
-            logger.info("Respuesta generada con Ollama")
-            return respuesta_ollama
-    
+    # =============================
+    # USO DE LLM: SOLO DESCOMENTA EL BLOQUE QUE QUIERAS USAR
+    # =============================
+
+    # --- BLOQUE PARA USAR GPT (OpenAI) ---
+    # Si quieres usar GPT, descomenta este bloque y comenta el de Ollama
+    # respuesta_openai = consultar_openai(prompt)
+    # if respuesta_openai is not None:
+    #     logger.info("Respuesta generada con OpenAI")
+    #     return respuesta_openai
+
+    # --- BLOQUE PARA USAR Llama (Ollama local) ---
+    # Si quieres usar Llama local, descomenta este bloque y comenta el de GPT
+    respuesta_ollama = consultar_ollama(prompt)
+    if respuesta_ollama is not None:
+        logger.info("Respuesta generada con Ollama")
+        return respuesta_ollama
+
+    # =============================
+    # FIN DE BLOQUES INTERCAMBIABLES
+    # =============================
+
     # Si ambos fallan, retornar None para usar respuesta directa
-    logger.warning("Tanto OpenAI como Ollama fallaron")
+    logger.warning("Ningún LLM respondió correctamente")
     return None
 
 # --------- CLASE PRINCIPAL DE LA API ---------
