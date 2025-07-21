@@ -15,6 +15,7 @@ from .vector_store import buscar_documentos
 from .serializers import FAQEntrySerializer, ChatbotQuerySerializer
 from .authentication import FAQTokenAuthentication, PublicAuthentication
 from .document_loader import agregar_faq_entry, validar_faq_duplicado, obtener_estadisticas_faq
+from .firebase_embeddings import firebase_embeddings
 
 import logging
 
@@ -309,42 +310,56 @@ class ChatbotAPIView(APIView):
 
     def post(self, request):
         pregunta = request.data.get("pregunta")
+        print(f"🔍 PREGUNTA RECIBIDA: '{pregunta}'")  # Debug
+        
         if not pregunta:
             return Response({"error": "Falta el campo 'pregunta'"}, status=400)
 
         # 1. Verificar si la pregunta está fuera del contexto del DCCO/ESPE
+        print(f"🔍 Verificando contexto para: '{pregunta}'")  # Debug
         if es_pregunta_fuera_contexto(pregunta):
+            print("❌ Pregunta fuera de contexto")  # Debug
             return Response({
                 "respuesta": generar_respuesta_fuera_contexto(),
                 "fuente": "sistema",
                 "metodo": "fuera_de_contexto"
             }, status=200)
+        
+        print("✅ Pregunta en contexto válido")  # Debug
 
         # 2. Intenciones básicas
         intencion = self.detectar_intencion(pregunta)
         if intencion:
+            print(f"🎯 Intención detectada: {intencion}")  # Debug
             return Response({
                 "respuesta": self.RESPUESTAS_BASICAS[intencion],
                 "fuente": "sistema",
                 "metodo": "intencion_basica"
             }, status=200)
+            
+        print("🔍 Buscando en Firebase RAG...")  # Debug
 
         try:
-            # 3. Buscar primero en Firebase con búsqueda exacta
-            resultado_firebase = self.busqueda_firebase_inteligente(pregunta)
+            # 3. Buscar primero en Firebase con arquitectura RAG completa
+            logger.info(f"Buscando en Firebase RAG: {pregunta}")
+            resultado_firebase = firebase_embeddings.buscar_hibrida(pregunta)
+            logger.info(f"Resultado Firebase RAG: {resultado_firebase}")
             
-            if resultado_firebase:
-                # Usar respuesta directa sin reformulación (más confiable)
-                respuesta_final = resultado_firebase["respuesta"]
-                metodo_usado = "firebase_directa"
+            if resultado_firebase and resultado_firebase.get('found'):
+                # Usar respuesta directa del sistema RAG
+                respuesta_final = resultado_firebase["answer"]
+                metodo_usado = f"firebase_rag_{resultado_firebase.get('metodo', 'hibrido')}"
                 
+                logger.info(f"Respuesta encontrada en Firebase RAG: {respuesta_final[:100]}...")
                 return Response({
                     "respuesta": respuesta_final,
-                    "pregunta_relacionada": resultado_firebase["pregunta_original"],
-                    "fuente": "FAQ (Firebase)",
+                    "pregunta_relacionada": resultado_firebase.get("pregunta_original", ""),
+                    "fuente": "FAQ (Firebase RAG)",
                     "metodo": metodo_usado,
-                    "score": resultado_firebase["score"]
+                    "confidence": resultado_firebase.get("similarity", 0.0)
                 }, status=200)
+            
+            logger.info("No se encontró respuesta en Firebase RAG, usando sistema de respaldo...")
 
             # 4. Si no hay resultados en Firebase, usar búsqueda semántica tradicional
             documentos = buscar_documentos(pregunta, top_k=5)
