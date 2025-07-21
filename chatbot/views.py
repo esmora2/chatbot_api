@@ -63,9 +63,6 @@ def es_pregunta_fuera_contexto(pregunta):
         "web", "móvil", "inteligencia artificial", "machine learning",
         "aplicaciones", "conocimiento", "basadas", "expertos", "ia",
         
-        # Procesos universitarios
-        "admisión", "requisitos", "documentos", "certificado", "horario",
-        "cronograma", "calendario", "actividades", "eventos", "conferencia"
     ]
     
     # Temas claramente fuera de contexto
@@ -108,18 +105,30 @@ def es_pregunta_fuera_contexto(pregunta):
     # 1. No tiene palabras de contexto válido Y tiene temas prohibidos
     # 2. O si tiene claramente temas prohibidos sin contexto universitario
     if tiene_tema_prohibido and not tiene_contexto_valido:
-        return True
-    
+                    prompt = (
+                        "Eres un asistente de la ESPE. Reformula ÚNICAMENTE el estilo manteniendo EXACTAMENTE la misma información.\n"
+                        "INSTRUCCIONES ESTRICTAS:\n"
+                        "- NO cambies la información factual\n"
+                        "- NO agregues información nueva\n"
+                        "- SOLO mejora la redacción si es necesario\n\n"
+                        f"Respuesta original:\n{respuesta_base}\n\n"
+                        f"Pregunta del usuario:\n{pregunta}\n\n"
+                        "Reformula SOLO el estilo manteniendo TODA la información:"
+                    )
+                    respuesta_mejorada = consultar_llm_inteligente(prompt)
+                    if respuesta_mejorada is None:
+                        respuesta_mejorada = respuesta_base
+                        metodo = "faq_directa"
+                    else:
+                        metodo = "faq_reformulada"
+                    return Response({
+                        "respuesta": respuesta_mejorada,
+                        "pregunta_relacionada": doc.metadata["pregunta_original"],
+                        "fuente": "FAQ (CSV Backup)",
+                        "metodo": metodo,
+                        "similitud": round(score, 3)
+                    }, status=200)
     return False
-
-def validar_relevancia_respuesta(pregunta, respuesta, documentos):
-    """
-    Valida si la respuesta generada es relevante al contexto del DCCO/ESPE.
-    Configurado con umbrales estrictos para evitar respuestas fuera de contexto.
-    """
-    # Si no hay documentos relevantes, definitivamente no es válida
-    if not documentos:
-        return False
     
     # Calcular relevancia promedio de los documentos encontrados
     relevancia_promedio = 0
@@ -371,33 +380,25 @@ class ChatbotAPIView(APIView):
             for doc in documentos:
                 if doc.metadata.get("source") == "faq":
                     score = similitud_texto(pregunta, doc.metadata.get("pregunta_original", ""))
-                    
                     # Si el score es muy alto (>= 0.75), responder inmediatamente
                     if score >= 0.75:
                         respuesta_base = doc.metadata["respuesta_original"]
-                        prompt = f"""Eres un asistente de la ESPE. Reformula ÚNICAMENTE el estilo manteniendo EXACTAMENTE la misma información.
-
-INSTRUCCIONES ESTRICTAS:
-- NO cambies la información factual
-- NO agregues información nueva
-- SOLO mejora la redacción si es necesario
-
-Respuesta original:
-{respuesta_base}
-
-Pregunta del usuario:
-{pregunta}
-
-Reformula SOLO el estilo manteniendo TODA la información:"""
+                        prompt = (
+                            "Eres un asistente de la ESPE. Reformula ÚNICAMENTE el estilo manteniendo EXACTAMENTE la misma información.\n"
+                            "INSTRUCCIONES ESTRICTAS:\n"
+                            "- NO cambies la información factual\n"
+                            "- NO agregues información nueva\n"
+                            "- SOLO mejora la redacción si es necesario\n\n"
+                            f"Respuesta original:\n{respuesta_base}\n\n"
+                            f"Pregunta del usuario:\n{pregunta}\n\n"
+                            "Reformula SOLO el estilo manteniendo TODA la información:"
+                        )
                         respuesta_mejorada = consultar_llm_inteligente(prompt)
-                        
-                        # Si OpenAI falla, usar respuesta original
                         if respuesta_mejorada is None:
                             respuesta_mejorada = respuesta_base
                             metodo = "faq_directa"
                         else:
                             metodo = "faq_reformulada"
-                            
                         return Response({
                             "respuesta": respuesta_mejorada,
                             "pregunta_relacionada": doc.metadata["pregunta_original"],
@@ -405,7 +406,6 @@ Reformula SOLO el estilo manteniendo TODA la información:"""
                             "metodo": metodo,
                             "similitud": round(score, 3)
                         }, status=200)
-                    
                     # Guardar el mejor FAQ para usar después si no hay match exacto
                     if score > mejor_faq_score:
                         mejor_faq_doc = doc
@@ -452,13 +452,24 @@ Respuesta:"""
             # 7. Si no hay buen contenido web/pdf, usar el mejor FAQ si es suficientemente bueno
             if mejor_faq_doc and mejor_faq_score >= 0.6:  # Umbral más bajo para FAQs
                 respuesta_base = mejor_faq_doc.metadata["respuesta_original"]
-                
-                # Usar respuesta directa sin reformulación para evitar problemas
-                respuesta_final = respuesta_base
-                metodo = "faq_directa"
-                    
+                prompt = (
+                    "Eres un asistente de la ESPE. Reformula ÚNICAMENTE el estilo manteniendo EXACTAMENTE la misma información.\n"
+                    "INSTRUCCIONES ESTRICTAS:\n"
+                    "- NO cambies la información factual\n"
+                    "- NO agregues información nueva\n"
+                    "- SOLO mejora la redacción si es necesario\n\n"
+                    f"Respuesta original:\n{respuesta_base}\n\n"
+                    f"Pregunta del usuario:\n{pregunta}\n\n"
+                    "Reformula SOLO el estilo manteniendo TODA la información:"
+                )
+                respuesta_mejorada = consultar_llm_inteligente(prompt)
+                if respuesta_mejorada is None:
+                    respuesta_mejorada = respuesta_base
+                    metodo = "faq_directa"
+                else:
+                    metodo = "faq_reformulada"
                 return Response({
-                    "respuesta": respuesta_final,
+                    "respuesta": respuesta_mejorada,
                     "pregunta_relacionada": mejor_faq_doc.metadata["pregunta_original"],
                     "fuente": "FAQ (CSV Backup)",
                     "metodo": metodo,
@@ -646,24 +657,18 @@ class KnowledgeBaseAPIView(APIView):
             )
 
         rows = self._read_rows()
-        next_id = (
-            max([int(r["id"]) for r in rows] or [0]) + 1
-        )  # ▼ auto-incremento ▼
-
-        now = timezone.now().isoformat()
-
+        nuevo_id = str(len(rows) + 1)
+        ahora = timezone.now().isoformat()
         new_row = {
-            "id": str(next_id),
+            "id": nuevo_id,
             "Pregunta": pregunta,
             "Respuesta": respuesta,
             "Categoría": categoria,
-            "fechaCreacion": now,
-            "fechaModificacion": "",
+            "fechaCreacion": ahora,
+            "fechaModificacion": ahora
         }
-
         rows.append(new_row)
         self._write_rows(rows)
-
         return Response(new_row, status=201)
 
     # ---------- PUT update ----------
