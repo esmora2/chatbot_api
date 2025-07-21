@@ -182,15 +182,18 @@ class FirebaseService:
     
     def add_faq(self, pregunta: str, respuesta: str, categoria: str = "") -> Tuple[bool, str]:
         """
-        Agrega una nueva FAQ a Firestore
+        Agrega una nueva FAQ a Firestore, generando embeddings automáticamente
         """
         if not self.is_connected():
             return False, "Firebase no está conectado"
-        
         try:
-            # Generar ID único
+            from .firebase_embeddings import FirebaseEmbeddingsService
+            embeddings_service = FirebaseEmbeddingsService()
+            embedding_pregunta = embeddings_service.generar_embedding(pregunta)
+            embedding_respuesta = embeddings_service.generar_embedding(respuesta)
+            embedding_combinado = embeddings_service.generar_embedding(f"{pregunta} {respuesta}")
+
             doc_ref = self.db.collection(self.collection_name).document()
-            
             faq_data = {
                 'pregunta': pregunta.strip(),
                 'respuesta': respuesta.strip(),
@@ -199,16 +202,17 @@ class FirebaseService:
                 'fecha_modificacion': None,
                 'activo': True,
                 'fuente': 'api_add',
+                'embedding_pregunta': embedding_pregunta,
+                'embedding_respuesta': embedding_respuesta,
+                'embedding_combinado': embedding_combinado,
                 'metadata': {
                     'palabras_clave': self._extract_keywords(pregunta),
                     'longitud_respuesta': len(respuesta)
                 }
             }
-            
             doc_ref.set(faq_data)
             logger.info(f"FAQ agregada con ID: {doc_ref.id}")
             return True, f"FAQ agregada exitosamente con ID: {doc_ref.id}"
-            
         except Exception as e:
             logger.error(f"Error agregando FAQ: {e}")
             return False, f"Error agregando FAQ: {str(e)}"
