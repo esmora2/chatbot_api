@@ -67,6 +67,7 @@ urlpatterns = [
     
     # Nuevos endpoints Firebase
     path('firebase/faq/', FirebaseFAQManagementAPIView.as_view(), name='firebase-faq-management'),
+    path('firebase/faq-management/', FirebaseFAQManagementAPIView.as_view(), name='firebase-faq-management-post'),
     path('firebase/search/', FirebaseFAQSearchAPIView.as_view(), name='firebase-faq-search'),
     path('firebase/status/', FirebaseStatusAPIView.as_view(), name='firebase-status'),
 ]
