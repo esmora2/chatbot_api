@@ -105,53 +105,32 @@ def es_pregunta_fuera_contexto(pregunta):
     # 1. No tiene palabras de contexto válido Y tiene temas prohibidos
     # 2. O si tiene claramente temas prohibidos sin contexto universitario
     if tiene_tema_prohibido and not tiene_contexto_valido:
-                    prompt = (
-                        "Eres un asistente de la ESPE. Reformula ÚNICAMENTE el estilo manteniendo EXACTAMENTE la misma información.\n"
-                        "INSTRUCCIONES ESTRICTAS:\n"
-                        "- NO cambies la información factual\n"
-                        "- NO agregues información nueva\n"
-                        "- SOLO mejora la redacción si es necesario\n\n"
-                        f"Respuesta original:\n{respuesta_base}\n\n"
-                        f"Pregunta del usuario:\n{pregunta}\n\n"
-                        "Reformula SOLO el estilo manteniendo TODA la información:"
-                    )
-                    respuesta_mejorada = consultar_llm_inteligente(prompt)
-                    if respuesta_mejorada is None:
-                        respuesta_mejorada = respuesta_base
-                        metodo = "faq_directa"
-                    else:
-                        metodo = "faq_reformulada"
-                    return Response({
-                        "respuesta": respuesta_mejorada,
-                        "pregunta_relacionada": doc.metadata["pregunta_original"],
-                        "fuente": "FAQ (CSV Backup)",
-                        "metodo": metodo,
-                        "similitud": round(score, 3)
-                    }, status=200)
+        return True
     return False
-    
+
+# -------------------
+# FUNCIÓN AGREGADA: validar_relevancia_respuesta
+def validar_relevancia_respuesta(pregunta, respuesta, documentos):
+    """
+    Valida si la respuesta generada es relevante para el contexto DCCO/ESPE.
+    Retorna True si la relevancia es suficiente, False si debe rechazarse.
+    """
     # Calcular relevancia promedio de los documentos encontrados
     relevancia_promedio = 0
     documentos_validos = 0
-    
     for doc in documentos:
         # Solo considerar documentos relevantes
         if doc.metadata.get("source") in ["faq", "web", "pdf"]:
             score = similitud_texto(pregunta, doc.page_content[:200])
             relevancia_promedio += score
             documentos_validos += 1
-    
     if documentos_validos == 0:
         return False
-        
     relevancia_promedio /= documentos_validos
-    
     # UMBRAL ESTRICTO: Solo permitir preguntas con alta relevancia
     umbral_estricto = 0.25  # Mucho más alto para evitar falsos positivos
-    
     if relevancia_promedio < umbral_estricto:
         return False
-    
     # Si la respuesta está vacía (llamada previa), verificar palabras clave en la pregunta
     if not respuesta.strip():
         pregunta_lower = pregunta.lower()
@@ -161,14 +140,11 @@ def es_pregunta_fuera_contexto(pregunta):
             "syllabus", "programa", "aplicaciones", "software", "psicólogo",
             "bienestar", "coordinador", "secretaria", "biblioteca", "laboratorio"
         ]
-        
         # Debe contener al menos una palabra académica relevante
         tiene_palabra_academica = any(palabra in pregunta_lower for palabra in palabras_academicas)
         if not tiene_palabra_academica:
             return False
-        
         return True
-    
     # Verificar si la respuesta contiene información específica del DCCO/ESPE
     respuesta_lower = respuesta.lower()
     indicadores_especificos = [
@@ -176,9 +152,7 @@ def es_pregunta_fuera_contexto(pregunta):
         "estudiante", "curso", "materia", "profesor", "carrera",
         "syllabus", "programa", "aplicaciones", "conocimiento", "software"
     ]
-    
     tiene_indicadores = any(indicador in respuesta_lower for indicador in indicadores_especificos)
-    
     return tiene_indicadores
 
 def generar_respuesta_fuera_contexto():
