@@ -336,32 +336,36 @@ class ChatbotAPIView(APIView):
             logger.info(f"Resultado Firebase RAG: {resultado_firebase}")
             
             if resultado_firebase and resultado_firebase.get('found'):
-                # Usar respuesta directa del sistema RAG
                 respuesta_final = resultado_firebase["answer"]
                 metodo_usado = f"firebase_rag_{resultado_firebase.get('metodo', 'hibrido')}"
-                
-                logger.info(f"Respuesta encontrada en Firebase RAG: {respuesta_final[:100]}...")
-                return Response({
-                    "respuesta": respuesta_final,
-                    "pregunta_relacionada": resultado_firebase.get("pregunta_original", ""),
-                    "fuente": "FAQ (Firebase RAG)",
-                    "metodo": metodo_usado,
-                    "confidence": resultado_firebase.get("similarity", 0.0)
-                }, status=200)
+                # Si la respuesta de Firebase es vacía o muy genérica, continuar con el flujo de PDFs
+                if not respuesta_final or len(respuesta_final.strip()) < 20 or respuesta_final.lower().startswith("lo siento"):
+                    logger.info(f"[DEPURACIÓN] Respuesta de Firebase RAG vacía o poco relevante, continuando con búsqueda en PDFs...")
+                else:
+                    logger.info(f"Respuesta encontrada en Firebase RAG: {respuesta_final[:100]}...")
+                    return Response({
+                        "respuesta": respuesta_final,
+                        "pregunta_relacionada": resultado_firebase.get("pregunta_original", ""),
+                        "fuente": "FAQ (Firebase RAG)",
+                        "metodo": metodo_usado,
+                        "confidence": resultado_firebase.get("similarity", 0.0)
+                    }, status=200)
             
             logger.info("No se encontró respuesta en Firebase RAG, usando sistema de respaldo...")
 
             # 4. Si no hay resultados en Firebase, usar búsqueda semántica tradicional
             documentos = buscar_documentos(pregunta, top_k=5)
+            logger.info(f"[DEPURACIÓN] Documentos devueltos por buscar_documentos para la pregunta: '{pregunta}'")
+            for idx, doc in enumerate(documentos):
+                logger.info(f"[DEPURACIÓN] Documento #{idx+1}: source={doc.metadata.get('source')}, filename={doc.metadata.get('filename', '')}, chunk_id={doc.metadata.get('chunk_id', '')}, preview='{doc.page_content[:100].replace(chr(10),' ')}'")
 
             # 5. Buscar coincidencia exacta en FAQs del vector store (fallback)
             mejor_faq_doc = None
             mejor_faq_score = 0
-            
             for doc in documentos:
                 if doc.metadata.get("source") == "faq":
                     score = similitud_texto(pregunta, doc.metadata.get("pregunta_original", ""))
-                    # Si el score es muy alto (>= 0.75), responder inmediatamente
+                    logger.info(f"[DEPURACIÓN] FAQ: score={score:.3f}, pregunta_original='{doc.metadata.get('pregunta_original','')[:80]}'")
                     if score >= 0.75:
                         respuesta_base = doc.metadata["respuesta_original"]
                         prompt = (
@@ -387,7 +391,6 @@ class ChatbotAPIView(APIView):
                             "metodo": metodo,
                             "similitud": round(score, 3)
                         }, status=200)
-                    # Guardar el mejor FAQ para usar después si no hay match exacto
                     if score > mejor_faq_score:
                         mejor_faq_doc = doc
                         mejor_faq_score = score
@@ -398,12 +401,14 @@ class ChatbotAPIView(APIView):
             for doc in documentos:
                 if doc.metadata.get("source") != "faq":
                     score = similitud_texto(pregunta, doc.page_content[:200])
+                    logger.info(f"[DEPURACIÓN] Documento no-FAQ: source={doc.metadata.get('source')}, filename={doc.metadata.get('filename','')}, score={score:.3f}, preview='{doc.page_content[:80].replace(chr(10),' ')}'")
                     if score > mejor_score:
                         mejor_doc = doc
                         mejor_score = score
 
             if mejor_doc and mejor_score >= 0.3:
                 contexto = mejor_doc.page_content[:800]
+                logger.info(f"[DEPURACIÓN] Mejor documento no-FAQ seleccionado: source={mejor_doc.metadata.get('source')}, filename={mejor_doc.metadata.get('filename','')}, score={mejor_score:.3f}")
                 prompt = f"""Con base únicamente en el siguiente contenido:
 
 {contexto}
@@ -414,14 +419,11 @@ Responde la siguiente pregunta de manera clara y académica:
 
 Respuesta:"""
                 respuesta_llm = consultar_llm_inteligente(prompt)
-                
-                # Si OpenAI falla, usar contenido directamente
                 if respuesta_llm is None:
                     respuesta_llm = f"Según la información disponible: {contexto[:400]}..."
                     metodo = "contenido_procesado"
                 else:
                     metodo = "pdf_llm_refinado"
-                    
                 return Response({
                     "respuesta": respuesta_llm,
                     "fuente": mejor_doc.metadata.get("source", "PDF"),
@@ -431,7 +433,7 @@ Respuesta:"""
                 }, status=200)
 
             # 7. Si no hay buen contenido web/pdf, usar el mejor FAQ si es suficientemente bueno
-            if mejor_faq_doc and mejor_faq_score >= 0.6:  # Umbral más bajo para FAQs
+            if mejor_faq_doc and mejor_faq_score >= 0.6:
                 respuesta_base = mejor_faq_doc.metadata["respuesta_original"]
                 prompt = (
                     "Eres un asistente de la ESPE. Reformula ÚNICAMENTE el estilo manteniendo EXACTAMENTE la misma información.\n"
@@ -459,6 +461,7 @@ Respuesta:"""
 
             # 8. Validar relevancia antes del fallback
             if not validar_relevancia_respuesta(pregunta, "", documentos):
+                logger.info(f"[DEPURACIÓN] Ningún documento relevante encontrado para la pregunta: '{pregunta}'")
                 return Response({
                     "respuesta": generar_respuesta_fuera_contexto(),
                     "fuente": "sistema",
@@ -467,6 +470,7 @@ Respuesta:"""
 
             # 9. Último recurso: pasar todo el contexto al LLM con restricción
             contexto_general = "\n\n".join([doc.page_content[:400] for doc in documentos])
+            logger.info(f"[DEPURACIÓN] Enviando contexto general al LLM. Longitud total: {len(contexto_general)}")
             prompt = f"""Eres un asistente del Departamento de Ciencias de la Computación (DCCO) de la ESPE. 
 SOLO puedes responder preguntas relacionadas con la universidad, el departamento, carreras, materias, servicios estudiantiles, o información académica.
 
@@ -480,8 +484,6 @@ Pregunta:
 
 Respuesta:"""
             respuesta_fallback = consultar_llm_inteligente(prompt)
-            
-            # Si OpenAI falla, usar respuesta genérica del primer documento
             if respuesta_fallback is None:
                 if documentos:
                     primer_doc = documentos[0]
@@ -491,6 +493,7 @@ Respuesta:"""
                         respuesta_fallback = primer_doc.page_content[:200] + "..."
                     metodo = "contenido_directo"
                 else:
+                    logger.info(f"[DEPURACIÓN] No hay documentos para fallback. Respondiendo fuera de contexto.")
                     return Response({
                         "respuesta": generar_respuesta_fuera_contexto(),
                         "fuente": "sistema",
@@ -498,22 +501,20 @@ Respuesta:"""
                     }, status=200)
             else:
                 metodo = "llm_con_restriccion_contexto"
-            
-            # Validar que la respuesta generada sea relevante (solo si viene de LLM)
             if metodo == "llm_con_restriccion_contexto" and not validar_relevancia_respuesta(pregunta, respuesta_fallback, documentos):
+                logger.info(f"[DEPURACIÓN] Respuesta generada por LLM no relevante para la pregunta: '{pregunta}'")
                 return Response({
                     "respuesta": generar_respuesta_fuera_contexto(),
                     "fuente": "sistema",
                     "metodo": "respuesta_no_relevante"
                 }, status=200)
-            
             return Response({
                 "respuesta": respuesta_fallback,
                 "fuente": "LLM" if metodo == "llm_con_restriccion_contexto" else "Sistema",
                 "metodo": metodo
             }, status=200)
-
         except Exception as e:
+            logger.error(f"[DEPURACIÓN] Excepción en el flujo de respuesta: {e}")
             return Response({
                 "error": "Error interno del servidor",
                 "detalle": str(e)

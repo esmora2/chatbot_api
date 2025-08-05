@@ -1,3 +1,19 @@
+def indexar_pdfs_en_directorio(directorio=None):
+    """
+    Recorre el directorio dado (por defecto BASE_DIR) y procesa/indexa todos los PDFs encontrados.
+    Llama a cargar_documentos() para asegurar que los PDFs estén en el vector store.
+    """
+    if directorio is None:
+        directorio = BASE_DIR
+    print(f"[Indexación automática] Buscando PDFs en {directorio}")
+    pdfs = [f for f in os.listdir(directorio) if f.endswith('.pdf')]
+    if not pdfs:
+        print("[Indexación automática] No se encontraron PDFs para indexar.")
+        return
+    # Llama a cargar_documentos(), que ya procesa e indexa los PDFs
+    print(f"[Indexación automática] Procesando e indexando {len(pdfs)} PDFs...")
+    cargar_documentos()
+    print(f"[Indexación automática] Indexación de PDFs completada.")
 import pandas as pd
 import os
 import re
