@@ -33,6 +33,170 @@ OPENAI_API_KEY = getattr(settings, 'OPENAI_API_KEY', '')
 def similitud_texto(a, b):
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
+# --------- ENTIDADES Y CONTEXTO ESPECÍFICO DEL DCCO ---------
+
+ENTIDADES_DCCO = {
+    "directores": {
+        "software": "Ing. Mauricio Campaña",
+        "ingenieria_software": "Ing. Mauricio Campaña",
+        "tecnologias": "Director de Tecnologías de la Información",
+        "sistemas": "Director de Sistemas",
+        "dcco": "Director del Departamento de Ciencias de la Computación",
+        "departamento": "Director del Departamento de Ciencias de la Computación"
+    },
+    "carreras": [
+        "Ingeniería en Software",
+        "Tecnologías de la Información",
+        "Sistemas de Información",
+        "Ciencias de la Computación"
+    ],
+    "materias_clave": [
+        "Aplicaciones Basadas en el Conocimiento",
+        "Aplicaciones Distribuidas",
+        "Programación Web",
+        "Base de Datos",
+        "Estructura de Datos",
+        "Algoritmos",
+        "Ingeniería de Software",
+        "Sistemas Distribuidos"
+    ],
+    "servicios": [
+        "Bienestar Estudiantil",
+        "Biblioteca",
+        "Laboratorios",
+        "Secretaría",
+        "Coordinación Académica"
+    ],
+    "ubicaciones": [
+        "Campus Sangolquí",
+        "Universidad ESPE",
+        "Departamento DCCO"
+    ],
+    "informacion_ubicacion": {
+        "universidad": "Universidad de las Fuerzas Armadas ESPE",
+        "campus_principal": "Campus Sangolquí",
+        "direccion": "Av. General Rumiñahui s/n, Sangolquí, Ecuador",
+        "departamento": "Departamento de Ciencias de la Computación (DCCO)",
+        "provincia": "Pichincha",
+        "ciudad": "Sangolquí"
+    }
+}
+
+def detectar_entidades_dcco(pregunta):
+    """
+    Detecta entidades específicas del DCCO en la pregunta para mejorar el contexto
+    """
+    pregunta_lower = pregunta.lower()
+    entidades_detectadas = {
+        "directores": [],
+        "carreras": [],
+        "materias": [],
+        "servicios": [],
+        "ubicaciones": []
+    }
+    
+    # Detectar directores
+    if "director" in pregunta_lower:
+        for clave, nombre in ENTIDADES_DCCO["directores"].items():
+            if clave in pregunta_lower:
+                entidades_detectadas["directores"].append(nombre)
+    
+    # Detectar carreras
+    for carrera in ENTIDADES_DCCO["carreras"]:
+        if any(palabra in pregunta_lower for palabra in carrera.lower().split()):
+            entidades_detectadas["carreras"].append(carrera)
+    
+    # Detectar materias
+    for materia in ENTIDADES_DCCO["materias_clave"]:
+        if any(palabra in pregunta_lower for palabra in materia.lower().split()):
+            entidades_detectadas["materias"].append(materia)
+    
+    # Detectar servicios
+    for servicio in ENTIDADES_DCCO["servicios"]:
+        if any(palabra in pregunta_lower for palabra in servicio.lower().split()):
+            entidades_detectadas["servicios"].append(servicio)
+    
+    return entidades_detectadas
+
+def generar_prompt_contextual_inteligente(pregunta, contexto, entidades=None):
+    """
+    Genera un prompt contextual inteligente basado en las entidades detectadas
+    """
+    if entidades is None:
+        entidades = detectar_entidades_dcco(pregunta)
+    
+    pregunta_lower = pregunta.lower()
+    
+    # Detectar si es una pregunta sobre ubicación de la ESPE
+    es_pregunta_ubicacion = any(palabra in pregunta_lower for palabra in ["donde", "dónde", "ubicación", "queda", "está", "dirección"])
+    
+    # Construir contexto específico basado en entidades detectadas
+    contexto_especifico = []
+    
+    if es_pregunta_ubicacion and "espe" in pregunta_lower:
+        info_ubicacion = ENTIDADES_DCCO["informacion_ubicacion"]
+        contexto_especifico.append(f"INFORMACIÓN DE UBICACIÓN:")
+        contexto_especifico.append(f"- Universidad: {info_ubicacion['universidad']}")
+        contexto_especifico.append(f"- Campus: {info_ubicacion['campus_principal']}")
+        contexto_especifico.append(f"- Dirección: {info_ubicacion['direccion']}")
+        contexto_especifico.append(f"- Ciudad: {info_ubicacion['ciudad']}, {info_ubicacion['provincia']}")
+        contexto_especifico.append(f"- Departamento: {info_ubicacion['departamento']}")
+    
+    if entidades["directores"]:
+        contexto_especifico.append(f"DIRECTORES RELEVANTES: {', '.join(entidades['directores'])}")
+    
+    if entidades["carreras"]:
+        contexto_especifico.append(f"CARRERAS RELACIONADAS: {', '.join(entidades['carreras'])}")
+        
+    if entidades["materias"]:
+        contexto_especifico.append(f"MATERIAS RELACIONADAS: {', '.join(entidades['materias'])}")
+    
+    # Instrucciones específicas basadas en el tipo de pregunta
+    instrucciones_especificas = []
+    
+    if es_pregunta_ubicacion and "espe" in pregunta_lower:
+        instrucciones_especificas.append("- Para preguntas de ubicación, proporciona la información completa de dirección y campus")
+    
+    if "director" in pregunta.lower() and not entidades["directores"]:
+        instrucciones_especificas.append("- Si preguntan por 'director' sin especificar, pregunta de qué carrera o área específica")
+    
+    if any(palabra in pregunta.lower() for palabra in ["materia", "curso", "asignatura"]) and not entidades["materias"]:
+        instrucciones_especificas.append("- Si preguntan por materias sin especificar carrera, pregunta de qué carrera específica")
+    
+    if any(palabra in pregunta.lower() for palabra in ["horario", "hora"]):
+        instrucciones_especificas.append("- Para horarios, especifica si es de clases, atención, o servicios")
+    
+    # Construir el prompt completo
+    prompt = f"""Eres el asistente oficial del Departamento de Ciencias de la Computación (DCCO) de la ESPE.
+
+INFORMACIÓN INSTITUCIONAL:
+- Universidad: ESPE (Universidad de las Fuerzas Armadas)
+- Departamento: Ciencias de la Computación (DCCO)
+- Ubicación: Campus Sangolquí
+- Carreras principales: Ingeniería en Software, Tecnologías de la Información
+
+{chr(10).join(contexto_especifico) if contexto_especifico else ""}
+
+DIRECTORES CONOCIDOS:
+- Director de Carrera de Software: Ing. Mauricio Campaña
+- Director del DCCO: [Consultar información específica]
+
+INSTRUCCIONES ESPECÍFICAS:
+- Responde ÚNICAMENTE con información verificable del DCCO/ESPE
+- Si no tienes información específica, indica "No tengo esa información específica del DCCO en este momento"
+- Sé preciso con nombres, cargos y datos académicos
+{chr(10).join(f"  {instr}" for instr in instrucciones_especificas) if instrucciones_especificas else ""}
+
+INFORMACIÓN DISPONIBLE EN LA BASE DE CONOCIMIENTO:
+{contexto}
+
+PREGUNTA DEL ESTUDIANTE:
+{pregunta}
+
+RESPUESTA (específica, precisa y contextual):"""
+    
+    return prompt
+
 def es_pregunta_fuera_contexto(pregunta):
     """
     Detecta si una pregunta está fuera del contexto del DCCO/ESPE
@@ -44,6 +208,10 @@ def es_pregunta_fuera_contexto(pregunta):
         # Universidad/ESPE
         "espe", "universidad", "fuerzas armadas", "militar", "dcco", 
         "departamento", "computación", "ciencias de la computación",
+        
+        # Ubicación y campus
+        "donde", "dónde", "ubicación", "campus", "sangolquí", "dirección",
+        "localización", "encontrar", "llegar", "queda", "está", "sede",
         
         # Académico
         "carrera", "materia", "profesor", "docente", "estudiante", "alumno",
@@ -115,7 +283,26 @@ def validar_relevancia_respuesta(pregunta, respuesta, documentos):
     Valida si la respuesta generada es relevante para el contexto DCCO/ESPE.
     Retorna True si la relevancia es suficiente, False si debe rechazarse.
     """
-    # Calcular relevancia promedio de los documentos encontrados
+    pregunta_lower = pregunta.lower()
+    
+    # Verificación directa para preguntas sobre ubicación de ESPE
+    if any(palabra in pregunta_lower for palabra in ["donde", "dónde", "ubicación", "queda", "está"]) and "espe" in pregunta_lower:
+        logger.info("[VALIDACIÓN] Pregunta sobre ubicación de ESPE - permitida directamente")
+        return True
+    
+    # Verificación para preguntas con palabras clave académicas válidas
+    palabras_academicas_espe = [
+        "espe", "dcco", "departamento", "computación", "universidad",
+        "estudiante", "curso", "materia", "profesor", "carrera", "campus",
+        "syllabus", "programa", "aplicaciones", "software", "director",
+        "bienestar", "coordinador", "secretaria", "biblioteca", "laboratorio"
+    ]
+    
+    if any(palabra in pregunta_lower for palabra in palabras_academicas_espe):
+        logger.info("[VALIDACIÓN] Pregunta contiene palabras clave académicas - permitida")
+        return True
+    
+    # Calcular relevancia promedio de los documentos encontrados solo si no pasa las verificaciones anteriores
     relevancia_promedio = 0
     documentos_validos = 0
     for doc in documentos:
@@ -124,27 +311,26 @@ def validar_relevancia_respuesta(pregunta, respuesta, documentos):
             score = similitud_texto(pregunta, doc.page_content[:200])
             relevancia_promedio += score
             documentos_validos += 1
+    
     if documentos_validos == 0:
         return False
+    
     relevancia_promedio /= documentos_validos
-    # UMBRAL ESTRICTO: Solo permitir preguntas con alta relevancia
-    umbral_estricto = 0.25  # Mucho más alto para evitar falsos positivos
-    if relevancia_promedio < umbral_estricto:
+    
+    # UMBRAL MÁS PERMISIVO: Solo rechazar preguntas claramente irrelevantes
+    umbral_permisivo = 0.15  # Reducido de 0.25 a 0.15
+    if relevancia_promedio < umbral_permisivo:
+        logger.info(f"[VALIDACIÓN] Relevancia promedio muy baja: {relevancia_promedio:.3f}")
         return False
+    
     # Si la respuesta está vacía (llamada previa), verificar palabras clave en la pregunta
     if not respuesta.strip():
-        pregunta_lower = pregunta.lower()
-        palabras_academicas = [
-            "espe", "dcco", "departamento", "computación", "universidad",
-            "estudiante", "curso", "materia", "profesor", "carrera", "campus",
-            "syllabus", "programa", "aplicaciones", "software", "psicólogo",
-            "bienestar", "coordinador", "secretaria", "biblioteca", "laboratorio"
-        ]
         # Debe contener al menos una palabra académica relevante
-        tiene_palabra_academica = any(palabra in pregunta_lower for palabra in palabras_academicas)
+        tiene_palabra_academica = any(palabra in pregunta_lower for palabra in palabras_academicas_espe)
         if not tiene_palabra_academica:
             return False
         return True
+    
     # Verificar si la respuesta contiene información específica del DCCO/ESPE
     respuesta_lower = respuesta.lower()
     indicadores_especificos = [
@@ -409,15 +595,11 @@ class ChatbotAPIView(APIView):
             if mejor_doc and mejor_score >= 0.3:
                 contexto = mejor_doc.page_content[:800]
                 logger.info(f"[DEPURACIÓN] Mejor documento no-FAQ seleccionado: source={mejor_doc.metadata.get('source')}, filename={mejor_doc.metadata.get('filename','')}, score={mejor_score:.3f}")
-                prompt = f"""Con base únicamente en el siguiente contenido:
-
-{contexto}
-
-Responde la siguiente pregunta de manera clara y académica:
-
-{pregunta}
-
-Respuesta:"""
+                
+                # Usar prompt contextual inteligente
+                entidades = detectar_entidades_dcco(pregunta)
+                prompt = generar_prompt_contextual_inteligente(pregunta, contexto, entidades)
+                
                 respuesta_llm = consultar_llm_inteligente(prompt)
                 if respuesta_llm is None:
                     respuesta_llm = f"Según la información disponible: {contexto[:400]}..."
@@ -493,7 +675,7 @@ Respuesta:"""
                         respuesta_fallback = primer_doc.page_content[:200] + "..."
                     metodo = "contenido_directo"
                 else:
-                    logger.info(f"[DEPURACIÓN] No hay documentos para fallback. Respondiendo fuera de contexto.")
+                    logger.info("No hay documentos para fallback. Respondiendo fuera de contexto.")
                     return Response({
                         "respuesta": generar_respuesta_fuera_contexto(),
                         "fuente": "sistema",
