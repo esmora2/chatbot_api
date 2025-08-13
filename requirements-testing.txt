@@ -1,0 +1,37 @@
+# Herramientas de Testing y Calidad de Código
+pytest==7.4.0
+pytest-django==4.5.2
+pytest-cov==4.1.0
+pytest-json-report==1.5.0
+pytest-html==3.2.0
+pytest-mock==3.11.1
+
+# Análisis de Código
+pylint==2.17.4
+flake8==6.0.0
+black==23.7.0
+mypy==1.5.1
+isort==5.12.0
+
+# Seguridad
+bandit==1.7.5
+safety==2.3.5
+
+# Generación de Datos de Prueba
+factory-boy==3.3.0
+faker==19.3.0
+
+# Mocking y Testing HTTP
+responses==0.23.1
+requests-mock==1.11.0
+
+# Performance Testing
+locust==2.16.1
+
+# Cobertura y Reportes
+coverage==7.2.7
+coverage-badge==1.1.0
+
+# Linting adicional
+autopep8==2.0.2
+pydocstyle==6.3.0
