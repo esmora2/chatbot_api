@@ -494,13 +494,42 @@ class ChatbotAPIView(APIView):
             logger.info(f"Resultado Firebase RAG: {resultado_firebase}")
             
             if resultado_firebase and resultado_firebase.get('found'):
-                respuesta_final = resultado_firebase["answer"]
-                metodo_usado = f"firebase_rag_{resultado_firebase.get('metodo', 'hibrido')}"
+                respuesta_firebase_bruta = resultado_firebase["answer"]
+                metodo_base = resultado_firebase.get('metodo', 'hibrido')
+                
                 # Si la respuesta de Firebase es vacía o muy genérica, continuar con el flujo de PDFs
-                if not respuesta_final or len(respuesta_final.strip()) < 20 or respuesta_final.lower().startswith("lo siento"):
+                if not respuesta_firebase_bruta or len(respuesta_firebase_bruta.strip()) < 20 or respuesta_firebase_bruta.lower().startswith("lo siento"):
                     logger.info(f"[DEPURACIÓN] Respuesta de Firebase RAG vacía o poco relevante, continuando con búsqueda en PDFs...")
                 else:
-                    logger.info(f"Respuesta encontrada en Firebase RAG: {respuesta_final[:100]}...")
+                    logger.info(f"Respuesta encontrada en Firebase RAG: {respuesta_firebase_bruta[:100]}...")
+                    
+                    # 🔥 NUEVA FUNCIONALIDAD: Reformular respuesta de Firebase RAG con OpenAI
+                    prompt_reformulacion_firebase = (
+                        "Eres un asistente académico del DCCO/ESPE. Reformula esta respuesta para que sea más natural, clara y profesional.\n"
+                        "INSTRUCCIONES:\n"
+                        "- Mantén TODA la información factual original\n"
+                        "- Mejora la redacción y fluidez\n"
+                        "- Haz que suene más conversacional y amigable\n"
+                        "- Mantén el contexto académico y profesional\n"
+                        "- NO agregues información nueva que no esté en el original\n\n"
+                        f"Pregunta del estudiante:\n{pregunta}\n\n"
+                        f"Respuesta original de la base de datos:\n{respuesta_firebase_bruta}\n\n"
+                        "Respuesta reformulada y mejorada:"
+                    )
+                    
+                    respuesta_reformulada = consultar_llm_inteligente(prompt_reformulacion_firebase)
+                    
+                    if respuesta_reformulada is not None:
+                        # OpenAI reformuló exitosamente
+                        respuesta_final = respuesta_reformulada
+                        metodo_usado = f"firebase_rag_{metodo_base}_reformulada"
+                        logger.info(f"✅ Firebase RAG reformulada con OpenAI: {respuesta_final[:80]}...")
+                    else:
+                        # OpenAI falló, usar respuesta original
+                        respuesta_final = respuesta_firebase_bruta
+                        metodo_usado = f"firebase_rag_{metodo_base}_directa"
+                        logger.info(f"⚠️ OpenAI falló, usando respuesta Firebase directa")
+                    
                     return Response({
                         "respuesta": respuesta_final,
                         "pregunta_relacionada": resultado_firebase.get("pregunta_original", ""),
