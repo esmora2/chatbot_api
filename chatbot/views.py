@@ -456,6 +456,78 @@ class ChatbotAPIView(APIView):
                 return intencion
         return None
 
+    def _es_pregunta_academica_valida(self, pregunta):
+        """
+        Detecta si una pregunta es académicamente válida para el DCCO/ESPE
+        aunque no tenga documentos con alta similitud
+        """
+        pregunta_lower = pregunta.lower().strip()
+        
+        # Palabras clave que indican claramente contexto académico DCCO/ESPE
+        indicadores_academicos_fuertes = [
+            # Universidad/ESPE específicos
+            "espe", "universidad de las fuerzas armadas", "campus sangolquí",
+            "dcco", "departamento de ciencias de la computación",
+            
+            # Carreras específicas del DCCO
+            "ingeniería en software", "tecnologías de la información", 
+            "sistemas de información", "ciencias de la computación",
+            "carrera de software", "carrera de tecnologías",
+            
+            # Materias específicas del DCCO
+            "aplicaciones basadas en el conocimiento", "aplicaciones distribuidas",
+            "programación web", "base de datos", "estructura de datos",
+            "algoritmos", "sistemas distribuidos", "inteligencia artificial",
+            
+            # Servicios universitarios
+            "bienestar estudiantil", "secretaría", "coordinación académica",
+            "biblioteca", "laboratorios", "psicólogo universitario",
+            
+            # Preguntas sobre ubicación/información general pero con contexto ESPE
+            "dónde queda la espe", "donde está la espe", "ubicación de la espe",
+            "cómo llegar a la espe", "dirección de la espe",
+            
+            # Preguntas sobre el DCCO específicamente
+            "qué es el dcco", "materias del dcco", "carreras del dcco",
+            "profesores del dcco", "directores del dcco"
+        ]
+        
+        # Combinaciones de palabras que indican contexto válido
+        combinaciones_validas = [
+            ["materia", "espe"], ["curso", "espe"], ["carrera", "espe"],
+            ["profesor", "espe"], ["director", "espe"], ["secretaria", "espe"],
+            ["bienestar", "espe"], ["psicólogo", "espe"], ["laboratorio", "espe"],
+            ["aplicaciones", "conocimiento"], ["aplicaciones", "distribuidas"],
+            ["ingeniería", "software"], ["tecnologías", "información"],
+            ["ciencias", "computación"], ["base", "datos"]
+        ]
+        
+        # Verificar indicadores fuertes
+        for indicador in indicadores_academicos_fuertes:
+            if indicador in pregunta_lower:
+                return True
+        
+        # Verificar combinaciones de palabras
+        for combinacion in combinaciones_validas:
+            if all(palabra in pregunta_lower for palabra in combinacion):
+                return True
+        
+        # Verificar patrones específicos de preguntas académicas
+        patrones_academicos = [
+            r"(?:qué|que) (?:es|trata|significa) .*(espe|dcco|carrera|materia|curso)",
+            r"(?:dónde|donde) (?:está|queda|se encuentra) .*(espe|universidad|campus)",
+            r"(?:cómo|como) .*(estudiar|inscribir|matricular|ingresar) .*(espe|carrera)",
+            r"(?:cuál|cual) (?:es|son) .*(materias|cursos|requisitos) .*(carrera|dcco)",
+            r"(?:quién|quien) (?:es|está) .*(director|coordinador|profesor) .*(carrera|dcco)"
+        ]
+        
+        import re
+        for patron in patrones_academicos:
+            if re.search(patron, pregunta_lower):
+                return True
+        
+        return False
+
     def post(self, request):
         pregunta = request.data.get("pregunta")
         print(f"🔍 PREGUNTA RECIBIDA: '{pregunta}'")  # Debug
@@ -642,8 +714,9 @@ class ChatbotAPIView(APIView):
                     "similitud": round(mejor_faq_score, 3)
                 }, status=200)
 
-            # 8. Validar relevancia antes del fallback
-            if not validar_relevancia_respuesta(pregunta, "", documentos):
+            # 8. Validar relevancia antes del fallback - MEJORADO para contexto académico
+            es_pregunta_academica_valida = self._es_pregunta_academica_valida(pregunta)
+            if not validar_relevancia_respuesta(pregunta, "", documentos) and not es_pregunta_academica_valida:
                 logger.info(f"[DEPURACIÓN] Ningún documento relevante encontrado para la pregunta: '{pregunta}'")
                 return Response({
                     "respuesta": generar_respuesta_fuera_contexto(),
@@ -651,22 +724,49 @@ class ChatbotAPIView(APIView):
                     "metodo": "sin_contexto_relevante"
                 }, status=200)
 
-            # 9. Último recurso: pasar todo el contexto al LLM con restricción
+            # 9. Último recurso mejorado: LLM inteligente para preguntas académicas válidas
             contexto_general = "\n\n".join([doc.page_content[:400] for doc in documentos])
             logger.info(f"[DEPURACIÓN] Enviando contexto general al LLM. Longitud total: {len(contexto_general)}")
-            prompt = f"""Eres un asistente del Departamento de Ciencias de la Computación (DCCO) de la ESPE. 
-SOLO puedes responder preguntas relacionadas con la universidad, el departamento, carreras, materias, servicios estudiantiles, o información académica.
+            
+            # Prompt mejorado que incluye conocimiento general del DCCO/ESPE
+            prompt_inteligente = f"""Eres un asistente académico especializado del Departamento de Ciencias de la Computación (DCCO) de la Universidad ESPE.
 
-Si la pregunta no está relacionada con estos temas, responde que solo puedes ayudar con información del DCCO y la ESPE.
+INFORMACIÓN INSTITUCIONAL QUE CONOCES:
+- Universidad: ESPE (Universidad de las Fuerzas Armadas)
+- Departamento: DCCO (Departamento de Ciencias de la Computación)
+- Ubicación: Campus Sangolquí, Ecuador
+- Carreras principales: Ingeniería en Software, Tecnologías de la Información
 
-Contexto disponible:
+CARRERAS DEL DCCO:
+- Ingeniería en Software
+- Tecnologías de la Información  
+- Sistemas de Información
+- Ciencias de la Computación
+
+MATERIAS DESTACADAS:
+- Aplicaciones Basadas en el Conocimiento (materia sobre sistemas expertos, IA, minería de datos)
+- Aplicaciones Distribuidas (sistemas distribuidos, microservicios, arquitecturas)
+- Programación Web, Base de Datos, Estructura de Datos, Algoritmos
+
+DIRECTORES CONOCIDOS:
+- Director de Carrera de Software: Ing. Mauricio Campaña
+
+INSTRUCCIONES:
+- Responde SOLO preguntas relacionadas con DCCO/ESPE
+- Si no tienes información específica, di "No tengo esa información específica del DCCO"
+- Para preguntas sobre ubicación de ESPE: Campus Sangolquí
+- Para materias como "Aplicaciones Basadas en el Conocimiento": explica que trata sobre sistemas expertos e IA
+- Mantén un tono académico pero amigable
+
+CONTEXTO ADICIONAL DISPONIBLE:
 {contexto_general}
 
-Pregunta:
+PREGUNTA DEL ESTUDIANTE:
 {pregunta}
 
-Respuesta:"""
-            respuesta_fallback = consultar_llm_inteligente(prompt)
+RESPUESTA (específica y útil):"""
+            
+            respuesta_fallback = consultar_llm_inteligente(prompt_inteligente)
             if respuesta_fallback is None:
                 if documentos:
                     primer_doc = documentos[0]
@@ -683,8 +783,10 @@ Respuesta:"""
                         "metodo": "sin_contenido"
                     }, status=200)
             else:
-                metodo = "llm_con_restriccion_contexto"
-            if metodo == "llm_con_restriccion_contexto" and not validar_relevancia_respuesta(pregunta, respuesta_fallback, documentos):
+                metodo = "llm_academico_inteligente"
+            
+            # Validación menos estricta para preguntas académicas válidas
+            if metodo == "llm_academico_inteligente" and not self._es_pregunta_academica_valida(pregunta) and not validar_relevancia_respuesta(pregunta, respuesta_fallback, documentos):
                 logger.info(f"[DEPURACIÓN] Respuesta generada por LLM no relevante para la pregunta: '{pregunta}'")
                 return Response({
                     "respuesta": generar_respuesta_fuera_contexto(),
@@ -693,7 +795,7 @@ Respuesta:"""
                 }, status=200)
             return Response({
                 "respuesta": respuesta_fallback,
-                "fuente": "LLM" if metodo == "llm_con_restriccion_contexto" else "Sistema",
+                "fuente": "LLM Académico" if metodo == "llm_academico_inteligente" else "Sistema",
                 "metodo": metodo
             }, status=200)
         except Exception as e:
