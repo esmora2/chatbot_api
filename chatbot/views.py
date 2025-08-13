@@ -33,6 +33,145 @@ OPENAI_API_KEY = getattr(settings, 'OPENAI_API_KEY', '')
 def similitud_texto(a, b):
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
+# --------- ENTIDADES Y CONTEXTO ESPECÍFICO DEL DCCO ---------
+
+ENTIDADES_DCCO = {
+    "directores": {
+        "software": "Ing. Mauricio Campaña",
+        "ingenieria_software": "Ing. Mauricio Campaña",
+        "tecnologias": "Director de Tecnologías de la Información",
+        "sistemas": "Director de Sistemas",
+        "dcco": "Director del Departamento de Ciencias de la Computación",
+        "departamento": "Director del Departamento de Ciencias de la Computación"
+    },
+    "carreras": [
+        "Ingeniería en Software",
+        "Tecnologías de la Información",
+        "Sistemas de Información",
+        "Ciencias de la Computación"
+    ],
+    "materias_clave": [
+        "Aplicaciones Basadas en el Conocimiento",
+        "Aplicaciones Distribuidas",
+        "Programación Web",
+        "Base de Datos",
+        "Estructura de Datos",
+        "Algoritmos",
+        "Ingeniería de Software",
+        "Sistemas Distribuidos"
+    ],
+    "servicios": [
+        "Bienestar Estudiantil",
+        "Biblioteca",
+        "Laboratorios",
+        "Secretaría",
+        "Coordinación Académica"
+    ],
+    "ubicaciones": [
+        "Campus Sangolquí",
+        "Universidad ESPE",
+        "Departamento DCCO"
+    ]
+}
+
+def detectar_entidades_dcco(pregunta):
+    """
+    Detecta entidades específicas del DCCO en la pregunta para mejorar el contexto
+    """
+    pregunta_lower = pregunta.lower()
+    entidades_detectadas = {
+        "directores": [],
+        "carreras": [],
+        "materias": [],
+        "servicios": [],
+        "ubicaciones": []
+    }
+    
+    # Detectar directores
+    if "director" in pregunta_lower:
+        for clave, nombre in ENTIDADES_DCCO["directores"].items():
+            if clave in pregunta_lower:
+                entidades_detectadas["directores"].append(nombre)
+    
+    # Detectar carreras
+    for carrera in ENTIDADES_DCCO["carreras"]:
+        if any(palabra in pregunta_lower for palabra in carrera.lower().split()):
+            entidades_detectadas["carreras"].append(carrera)
+    
+    # Detectar materias
+    for materia in ENTIDADES_DCCO["materias_clave"]:
+        if any(palabra in pregunta_lower for palabra in materia.lower().split()):
+            entidades_detectadas["materias"].append(materia)
+    
+    # Detectar servicios
+    for servicio in ENTIDADES_DCCO["servicios"]:
+        if any(palabra in pregunta_lower for palabra in servicio.lower().split()):
+            entidades_detectadas["servicios"].append(servicio)
+    
+    return entidades_detectadas
+
+def generar_prompt_contextual_inteligente(pregunta, contexto, entidades=None):
+    """
+    Genera un prompt contextual inteligente basado en las entidades detectadas
+    """
+    if entidades is None:
+        entidades = detectar_entidades_dcco(pregunta)
+    
+    # Construir contexto específico basado en entidades detectadas
+    contexto_especifico = []
+    
+    if entidades["directores"]:
+        contexto_especifico.append(f"DIRECTORES RELEVANTES: {', '.join(entidades['directores'])}")
+    
+    if entidades["carreras"]:
+        contexto_especifico.append(f"CARRERAS RELACIONADAS: {', '.join(entidades['carreras'])}")
+        
+    if entidades["materias"]:
+        contexto_especifico.append(f"MATERIAS RELACIONADAS: {', '.join(entidades['materias'])}")
+    
+    # Instrucciones específicas basadas en el tipo de pregunta
+    instrucciones_especificas = []
+    
+    if "director" in pregunta.lower() and not entidades["directores"]:
+        instrucciones_especificas.append("- Si preguntan por 'director' sin especificar, pregunta de qué carrera o área específica")
+    
+    if any(palabra in pregunta.lower() for palabra in ["materia", "curso", "asignatura"]) and not entidades["materias"]:
+        instrucciones_especificas.append("- Si preguntan por materias sin especificar carrera, pregunta de qué carrera específica")
+    
+    if any(palabra in pregunta.lower() for palabra in ["horario", "hora"]):
+        instrucciones_especificas.append("- Para horarios, especifica si es de clases, atención, o servicios")
+    
+    # Construir el prompt completo
+    prompt = f"""Eres el asistente oficial del Departamento de Ciencias de la Computación (DCCO) de la ESPE.
+
+INFORMACIÓN INSTITUCIONAL:
+- Universidad: ESPE (Universidad de las Fuerzas Armadas)
+- Departamento: Ciencias de la Computación (DCCO)
+- Ubicación: Campus Sangolquí
+- Carreras principales: Ingeniería en Software, Tecnologías de la Información
+
+{chr(10).join(contexto_especifico) if contexto_especifico else ""}
+
+DIRECTORES CONOCIDOS:
+- Director de Carrera de Software: Ing. Mauricio Campaña
+- Director del DCCO: [Consultar información específica]
+
+INSTRUCCIONES ESPECÍFICAS:
+- Responde ÚNICAMENTE con información verificable del DCCO/ESPE
+- Si no tienes información específica, indica "No tengo esa información específica del DCCO en este momento"
+- Sé preciso con nombres, cargos y datos académicos
+{chr(10).join(f"  {instr}" for instr in instrucciones_especificas) if instrucciones_especificas else ""}
+
+INFORMACIÓN DISPONIBLE EN LA BASE DE CONOCIMIENTO:
+{contexto}
+
+PREGUNTA DEL ESTUDIANTE:
+{pregunta}
+
+RESPUESTA (específica, precisa y contextual):"""
+    
+    return prompt
+
 def es_pregunta_fuera_contexto(pregunta):
     """
     Detecta si una pregunta está fuera del contexto del DCCO/ESPE
@@ -173,14 +312,14 @@ def generar_respuesta_fuera_contexto():
 
 def consultar_openai(prompt):
     """
-    Llama a OpenAI (GPT-3.5) con un prompt.
+    Llama a OpenAI (GPT-3.5-turbo) con un prompt.
     Fallback: si falla, devuelve None para usar respuesta directa.
     """
     try:
         # Usar API key desde settings si está disponible
         api_key = getattr(settings, 'OPENAI_API_KEY', None) or OPENAI_API_KEY
         
-        if not api_key or api_key == 'your-openai-api-key-here':
+        if not api_key or api_key in ['your-openai-api-key-here', '']:
             logger.warning("OpenAI API key no configurada correctamente")
             return None
             
@@ -192,17 +331,36 @@ def consultar_openai(prompt):
         data = {
             "model": "gpt-3.5-turbo",
             "messages": [
-                {"role": "system", "content": "Eres un asistente académico del Departamento de Ciencias de la Computación de la ESPE. Responde siempre en español."},
+                {
+                    "role": "system", 
+                    "content": "Eres un asistente académico especializado del Departamento de Ciencias de la Computación (DCCO) de la Universidad ESPE. Respondes exclusivamente sobre temas relacionados con la universidad, el departamento, carreras, materias, servicios estudiantiles y asuntos académicos. Siempre respondes en español de manera clara, profesional y útil."
+                },
                 {"role": "user", "content": prompt}
             ],
-            "temperature": 0.6
+            "temperature": 0.7,
+            "max_tokens": 800,
+            "top_p": 1,
+            "frequency_penalty": 0,
+            "presence_penalty": 0
         }
-        response = requests.post(endpoint, headers=headers, json=data)
+        
+        logger.info(f"Enviando solicitud a OpenAI GPT-3.5-turbo...")
+        response = requests.post(endpoint, headers=headers, json=data, timeout=30)
+        
         if response.status_code == 200:
-            return response.json()["choices"][0]["message"]["content"].strip()
+            resultado = response.json()["choices"][0]["message"]["content"].strip()
+            logger.info(f"Respuesta exitosa de OpenAI (longitud: {len(resultado)} caracteres)")
+            return resultado
         else:
             logger.error(f"Error OpenAI API: {response.status_code} - {response.text}")
             return None
+            
+    except requests.exceptions.Timeout:
+        logger.error("Timeout al consultar OpenAI API")
+        return None
+    except requests.exceptions.ConnectionError:
+        logger.error("Error de conexión con OpenAI API")
+        return None
     except Exception as e:
         logger.error(f"Error consultando OpenAI: {e}")
         return None
@@ -253,17 +411,17 @@ def consultar_llm_inteligente(prompt):
 
     # --- BLOQUE PARA USAR GPT (OpenAI) ---
     # Si quieres usar GPT, descomenta este bloque y comenta el de Ollama
-    # respuesta_openai = consultar_openai(prompt)
-    # if respuesta_openai is not None:
-    #     logger.info("Respuesta generada con OpenAI")
-    #     return respuesta_openai
+    respuesta_openai = consultar_openai(prompt)
+    if respuesta_openai is not None:
+        logger.info("Respuesta generada con OpenAI GPT-3.5-turbo")
+        return respuesta_openai
 
     # --- BLOQUE PARA USAR Llama (Ollama local) ---
     # Si quieres usar Llama local, descomenta este bloque y comenta el de GPT
-    respuesta_ollama = consultar_ollama(prompt)
-    if respuesta_ollama is not None:
-        logger.info("Respuesta generada con Ollama")
-        return respuesta_ollama
+    # respuesta_ollama = consultar_ollama(prompt)
+    # if respuesta_ollama is not None:
+    #     logger.info("Respuesta generada con Ollama")
+    #     return respuesta_ollama
 
     # =============================
     # FIN DE BLOQUES INTERCAMBIABLES
@@ -409,15 +567,11 @@ class ChatbotAPIView(APIView):
             if mejor_doc and mejor_score >= 0.3:
                 contexto = mejor_doc.page_content[:800]
                 logger.info(f"[DEPURACIÓN] Mejor documento no-FAQ seleccionado: source={mejor_doc.metadata.get('source')}, filename={mejor_doc.metadata.get('filename','')}, score={mejor_score:.3f}")
-                prompt = f"""Con base únicamente en el siguiente contenido:
-
-{contexto}
-
-Responde la siguiente pregunta de manera clara y académica:
-
-{pregunta}
-
-Respuesta:"""
+                
+                # Usar prompt contextual inteligente
+                entidades = detectar_entidades_dcco(pregunta)
+                prompt = generar_prompt_contextual_inteligente(pregunta, contexto, entidades)
+                
                 respuesta_llm = consultar_llm_inteligente(prompt)
                 if respuesta_llm is None:
                     respuesta_llm = f"Según la información disponible: {contexto[:400]}..."
@@ -493,7 +647,7 @@ Respuesta:"""
                         respuesta_fallback = primer_doc.page_content[:200] + "..."
                     metodo = "contenido_directo"
                 else:
-                    logger.info(f"[DEPURACIÓN] No hay documentos para fallback. Respondiendo fuera de contexto.")
+                    logger.info("No hay documentos para fallback. Respondiendo fuera de contexto.")
                     return Response({
                         "respuesta": generar_respuesta_fuera_contexto(),
                         "fuente": "sistema",

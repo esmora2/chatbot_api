@@ -45,7 +45,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework.authtoken',
     'corsheaders',
-    'chatbot',
+    'chatbot.apps.ChatbotConfig',  # Especificación explícita de la configuración
 ]
 
 MIDDLEWARE = [
@@ -191,4 +191,7 @@ USE_OLLAMA_FALLBACK = os.getenv('USE_OLLAMA_FALLBACK', 'True').lower() == 'true'
 # Firebase Configuration
 FIREBASE_PROJECT_ID = os.getenv('FIREBASE_PROJECT_ID', 'chatbot-dcco')
 GOOGLE_APPLICATION_CREDENTIALS = os.getenv('GOOGLE_APPLICATION_CREDENTIALS', '')
+
+# Chatbot Configuration
+CHATBOT_PRELOAD_ON_STARTUP = os.getenv('CHATBOT_PRELOAD_ON_STARTUP', 'True').lower() == 'true'
 

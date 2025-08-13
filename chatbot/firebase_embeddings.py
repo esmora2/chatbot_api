@@ -30,6 +30,31 @@ class FirebaseEmbeddingsService:
         self.dimension = 384  # Dimensión del modelo all-MiniLM-L6-v2
         self.index = None
         self.documents = []
+        self._initialized = False  # Flag para saber si ya se inicializó
+        
+    def inicializar_automaticamente(self):
+        """
+        Inicializa automáticamente el índice vectorial al arrancar el servidor.
+        Se ejecuta una sola vez y mejora el rendimiento de las primeras consultas.
+        """
+        if self._initialized:
+            return True
+            
+        try:
+            logger.info("🚀 Iniciando precarga automática del índice vectorial...")
+            exito = self.cargar_indice_vectorial()
+            
+            if exito:
+                self._initialized = True
+                logger.info("✅ Índice vectorial precargado exitosamente al arrancar el servidor")
+            else:
+                logger.warning("⚠️ No se pudo precargar el índice vectorial, se cargará bajo demanda")
+                
+            return exito
+            
+        except Exception as e:
+            logger.error(f"❌ Error en precarga automática: {e}")
+            return False
         
     def generar_embedding(self, texto: str) -> List[float]:
         """
@@ -130,8 +155,13 @@ class FirebaseEmbeddingsService:
         """
         try:
             if not self.index or not self.documents:
-                logger.warning("Índice vectorial no cargado, cargando...")
-                if not self.cargar_indice_vectorial():
+                if not self._initialized:
+                    logger.info("Inicializando índice vectorial bajo demanda...")
+                    if not self.cargar_indice_vectorial():
+                        return []
+                    self._initialized = True
+                else:
+                    logger.warning("Índice vectorial no disponible a pesar de estar inicializado")
                     return []
             
             # Generar embedding de la pregunta
