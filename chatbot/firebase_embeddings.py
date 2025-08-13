@@ -90,11 +90,12 @@ class FirebaseEmbeddingsService:
                     embedding_respuesta = self.generar_embedding(respuesta)
                     
                     # Actualizar documento en Firebase
+                    from datetime import datetime
                     doc.reference.update({
                         'embedding_pregunta': embedding_pregunta,
                         'embedding_respuesta': embedding_respuesta,
                         'embedding_combinado': self.generar_embedding(f"{pregunta} {respuesta}"),
-                        'fecha_embedding': firestore.SERVER_TIMESTAMP
+                        'fecha_embedding': datetime.now()
                     })
                     
                     contador += 1
